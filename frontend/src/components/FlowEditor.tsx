@@ -23,27 +23,88 @@ const edgeStyles = `
   }
 `;
 
+// Source nodes
 import TextInputNode from "./nodes/TextInputNode";
 import ImageUploadNode from "./nodes/ImageUploadNode";
 import URLInputNode from "./nodes/URLInputNode";
+import PodcastEpisodeNode from "./nodes/PodcastEpisodeNode";
+import PodcastRSSNode from "./nodes/PodcastRSSNode";
+import AudioUploadNode from "./nodes/AudioUploadNode";
+import VideoUploadNode from "./nodes/VideoUploadNode";
+import PDFUploadNode from "./nodes/PDFUploadNode";
+import StockTickerNode from "./nodes/StockTickerNode";
+import ReportJSONNode from "./nodes/ReportJSONNode";
+
+// Processing nodes
 import EnhanceTextNode from "./nodes/EnhanceTextNode";
 import IPhonePhotoNode from "./nodes/IPhonePhotoNode";
 import AnimateNode from "./nodes/AnimateNode";
 import TextOverlayNode from "./nodes/TextOverlayNode";
 import CropNode from "./nodes/CropNode";
+import TranscribeNode from "./nodes/TranscribeNode";
+import GenerateReportNode from "./nodes/GenerateReportNode";
+import GenerateCopyNode from "./nodes/GenerateCopyNode";
+import GenerateLandingPagesNode from "./nodes/GenerateLandingPagesNode";
+import GenerateAdvertorialNode from "./nodes/GenerateAdvertorialNode";
+import GenerateAdvertorialCopyNode from "./nodes/GenerateAdvertorialCopyNode";
+import GenerateVisualConceptsNode from "./nodes/GenerateVisualConceptsNode";
+import SummarizeNode from "./nodes/SummarizeNode";
+import ExtractKeyPointsNode from "./nodes/ExtractKeyPointsNode";
+
+// Output nodes
 import ImageOutputNode from "./nodes/ImageOutputNode";
+import ReportPreviewNode from "./nodes/ReportPreviewNode";
+import CopyExportNode from "./nodes/CopyExportNode";
+import LandingPagePreviewNode from "./nodes/LandingPagePreviewNode";
+import AdvertorialPreviewNode from "./nodes/AdvertorialPreviewNode";
+import ImageGalleryNode from "./nodes/ImageGalleryNode";
+
+// Utility nodes
+import SplitReportSectionsNode from "./nodes/SplitReportSectionsNode";
+import MergeNode from "./nodes/MergeNode";
+import FilterByAngleNode from "./nodes/FilterByAngleNode";
+import PlatformToggleNode from "./nodes/PlatformToggleNode";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const nodeTypes: Record<string, any> = {
+  // Sources
   textInput: TextInputNode,
   imageUpload: ImageUploadNode,
   urlInput: URLInputNode,
+  podcastEpisode: PodcastEpisodeNode,
+  podcastRSS: PodcastRSSNode,
+  audioUpload: AudioUploadNode,
+  videoUpload: VideoUploadNode,
+  pdfUpload: PDFUploadNode,
+  stockTicker: StockTickerNode,
+  reportJSON: ReportJSONNode,
+  // Processing
   enhanceText: EnhanceTextNode,
   iphonePhoto: IPhonePhotoNode,
   animate: AnimateNode,
   textOverlay: TextOverlayNode,
   crop: CropNode,
+  transcribe: TranscribeNode,
+  generateReport: GenerateReportNode,
+  generateCopy: GenerateCopyNode,
+  generateLandingPages: GenerateLandingPagesNode,
+  generateAdvertorial: GenerateAdvertorialNode,
+  generateAdvertorialCopy: GenerateAdvertorialCopyNode,
+  generateVisualConcepts: GenerateVisualConceptsNode,
+  summarize: SummarizeNode,
+  extractKeyPoints: ExtractKeyPointsNode,
+  // Outputs
   imageOutput: ImageOutputNode,
+  reportPreview: ReportPreviewNode,
+  copyExport: CopyExportNode,
+  landingPagePreview: LandingPagePreviewNode,
+  advertorialPreview: AdvertorialPreviewNode,
+  imageGallery: ImageGalleryNode,
+  // Utilities
+  splitReportSections: SplitReportSectionsNode,
+  merge: MergeNode,
+  filterByAngle: FilterByAngleNode,
+  platformToggle: PlatformToggleNode,
 };
 
 // Preset flows - hardcoded templates
@@ -126,20 +187,84 @@ const presetFlows: PresetFlow[] = [
       { id: "e4-5", source: "crop-1", target: "output-1", type: "smoothstep" },
     ],
   },
+  {
+    name: "FWP Pipeline",
+    description: "Podcast to ads (full pipeline)",
+    nodes: [
+      { id: "podcast-1", type: "podcastEpisode", position: { x: 50, y: 200 }, data: { audioUrl: "", title: "" } },
+      { id: "transcribe-1", type: "transcribe", position: { x: 320, y: 200 }, data: { inputValue: "", transcript: "" } },
+      { id: "report-1", type: "generateReport", position: { x: 590, y: 200 }, data: { inputValue: "", report: null } },
+      { id: "copy-1", type: "generateCopy", position: { x: 860, y: 100 }, data: { inputValue: "", copy: null } },
+      { id: "landing-1", type: "generateLandingPages", position: { x: 860, y: 300 }, data: { inputValue: "", landingPages: null } },
+      { id: "concepts-1", type: "generateVisualConcepts", position: { x: 860, y: 500 }, data: { inputValue: "", concepts: [] } },
+      { id: "copyExport-1", type: "copyExport", position: { x: 1130, y: 100 }, data: { copy: null } },
+      { id: "landingPreview-1", type: "landingPagePreview", position: { x: 1130, y: 300 }, data: { landingPages: null } },
+      { id: "photo-1", type: "iphonePhoto", position: { x: 1130, y: 500 }, data: { inputValue: "", imageUrl: "", prompt: "", loading: false } },
+      { id: "gallery-1", type: "imageGallery", position: { x: 1400, y: 500 }, data: { images: [] } },
+    ],
+    edges: [
+      { id: "e1-2", source: "podcast-1", target: "transcribe-1", type: "smoothstep" },
+      { id: "e2-3", source: "transcribe-1", target: "report-1", type: "smoothstep" },
+      { id: "e3-4", source: "report-1", target: "copy-1", type: "smoothstep" },
+      { id: "e3-5", source: "report-1", target: "landing-1", type: "smoothstep" },
+      { id: "e3-6", source: "report-1", target: "concepts-1", type: "smoothstep" },
+      { id: "e4-7", source: "copy-1", target: "copyExport-1", type: "smoothstep" },
+      { id: "e5-8", source: "landing-1", target: "landingPreview-1", type: "smoothstep" },
+      { id: "e6-9", source: "concepts-1", target: "photo-1", type: "smoothstep" },
+      { id: "e9-10", source: "photo-1", target: "gallery-1", type: "smoothstep" },
+    ],
+  },
 ];
 
 // Sidebar items
 const sources = [
-  { type: "textInput", label: "Text Input", icon: "T" },
-  { type: "imageUpload", label: "Image Upload", icon: "I" },
-  { type: "urlInput", label: "URL Input", icon: "U" },
+  { type: "textInput", label: "Text Input", icon: "T", color: "#0071e3" },
+  { type: "urlInput", label: "URL Input", icon: "U", color: "#0071e3" },
+  { type: "imageUpload", label: "Image Upload", icon: "I", color: "#0071e3" },
+  { type: "audioUpload", label: "Audio Upload", icon: "A", color: "#3498db" },
+  { type: "videoUpload", label: "Video Upload", icon: "V", color: "#e74c3c" },
+  { type: "pdfUpload", label: "PDF Upload", icon: "P", color: "#c0392b" },
+  { type: "podcastEpisode", label: "Podcast Episode", icon: "E", color: "#9b59b6" },
+  { type: "podcastRSS", label: "Podcast RSS", icon: "R", color: "#e67e22" },
+  { type: "stockTicker", label: "Stock Ticker", icon: "$", color: "#27ae60" },
+  { type: "reportJSON", label: "Report JSON", icon: "J", color: "#8e44ad" },
 ];
+
 const operations = [
+  // Text processing
   { type: "enhanceText", label: "Enhance Text", icon: "E", gradient: "linear-gradient(135deg, #f59e0b 0%, #ef4444 100%)" },
-  { type: "iphonePhoto", label: "iPhone Photo", icon: "P", gradient: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)" },
-  { type: "textOverlay", label: "Text Overlay", icon: "T", gradient: "linear-gradient(135deg, #ec4899 0%, #f97316 100%)" },
+  { type: "summarize", label: "Summarize", icon: "S", gradient: "linear-gradient(135deg, #f97316 0%, #ea580c 100%)" },
+  { type: "extractKeyPoints", label: "Key Points", icon: "K", gradient: "linear-gradient(135deg, #10b981 0%, #059669 100%)" },
+  // Audio/Video
+  { type: "transcribe", label: "Transcribe", icon: "T", gradient: "linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)" },
   { type: "animate", label: "Animate", icon: "A", gradient: "linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%)" },
   { type: "crop", label: "Crop", icon: "C", gradient: "linear-gradient(135deg, #f59e0b 0%, #d97706 100%)" },
+  // Report pipeline
+  { type: "generateReport", label: "Generate Report", icon: "R", gradient: "linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%)" },
+  { type: "generateCopy", label: "Generate Copy", icon: "C", gradient: "linear-gradient(135deg, #ec4899 0%, #be185d 100%)" },
+  { type: "generateLandingPages", label: "Landing Pages", icon: "L", gradient: "linear-gradient(135deg, #10b981 0%, #047857 100%)" },
+  { type: "generateAdvertorial", label: "Advertorial", icon: "A", gradient: "linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%)" },
+  { type: "generateAdvertorialCopy", label: "Advertorial Copy", icon: "C", gradient: "linear-gradient(135deg, #ec4899 0%, #f43f5e 100%)" },
+  // Image generation
+  { type: "generateVisualConcepts", label: "Visual Concepts", icon: "V", gradient: "linear-gradient(135deg, #14b8a6 0%, #0d9488 100%)" },
+  { type: "iphonePhoto", label: "Generate Image", icon: "I", gradient: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)" },
+  { type: "textOverlay", label: "Text Overlay", icon: "T", gradient: "linear-gradient(135deg, #ec4899 0%, #f97316 100%)" },
+];
+
+const outputs = [
+  { type: "imageOutput", label: "Output", icon: "O", gradient: "linear-gradient(135deg, #11998e 0%, #38ef7d 100%)" },
+  { type: "reportPreview", label: "Report Preview", icon: "R", gradient: "linear-gradient(135deg, #8b5cf6 0%, #a855f7 100%)" },
+  { type: "copyExport", label: "Copy Export", icon: "E", gradient: "linear-gradient(135deg, #ec4899 0%, #f472b6 100%)" },
+  { type: "landingPagePreview", label: "Landing Preview", icon: "L", gradient: "linear-gradient(135deg, #06b6d4 0%, #22d3ee 100%)" },
+  { type: "advertorialPreview", label: "Advertorial Preview", icon: "A", gradient: "linear-gradient(135deg, #f97316 0%, #fb923c 100%)" },
+  { type: "imageGallery", label: "Image Gallery", icon: "G", gradient: "linear-gradient(135deg, #14b8a6 0%, #2dd4bf 100%)" },
+];
+
+const utilities = [
+  { type: "splitReportSections", label: "Split Sections", icon: "S", gradient: "linear-gradient(135deg, #6366f1 0%, #818cf8 100%)" },
+  { type: "merge", label: "Merge", icon: "M", gradient: "linear-gradient(135deg, #10b981 0%, #34d399 100%)" },
+  { type: "filterByAngle", label: "Filter Angle", icon: "F", gradient: "linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)" },
+  { type: "platformToggle", label: "Platform", icon: "P", gradient: "linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%)" },
 ];
 
 export default function FlowEditor() {
@@ -272,6 +397,51 @@ export default function FlowEditor() {
     event.dataTransfer.effectAllowed = "move";
   };
 
+  // Initial data for each node type
+  const getInitialData = (type: string): Record<string, unknown> => {
+    switch (type) {
+      // Sources
+      case "textInput": return { value: "" };
+      case "imageUpload": return { imageUrl: "" };
+      case "urlInput": return { value: "", articleText: "" };
+      case "audioUpload": return { audioBase64: "", mimeType: "", filename: "" };
+      case "videoUpload": return { videoBase64: "", mimeType: "", filename: "" };
+      case "pdfUpload": return { pdfBase64: "", filename: "" };
+      case "podcastEpisode": return { audioUrl: "", title: "" };
+      case "podcastRSS": return { audioUrl: "", title: "", episodes: [] };
+      case "stockTicker": return { ticker: "", name: "", price: 0, fundamentals: {} };
+      case "reportJSON": return { report: null };
+      // Processing
+      case "enhanceText": return { inputValue: "", outputValue: "" };
+      case "transcribe": return { inputValue: "", transcript: "" };
+      case "generateReport": return { inputValue: "", report: null };
+      case "generateCopy": return { inputValue: "", copy: null };
+      case "generateLandingPages": return { inputValue: "", landingPages: null };
+      case "generateAdvertorial": return { inputValue: "", headline: "", content: "" };
+      case "generateAdvertorialCopy": return { inputValue: "", adCopy: null };
+      case "generateVisualConcepts": return { inputValue: "", concepts: [] };
+      case "summarize": return { inputValue: "", summary: "" };
+      case "extractKeyPoints": return { inputValue: "", points: [] };
+      case "iphonePhoto": return { inputValue: "", imageUrl: "", prompt: "", loading: false };
+      case "animate": return { imageUrl: "", inputValue: "", videoUrl: "" };
+      case "textOverlay": return { imageUrl: "", inputValue: "", outputUrl: "" };
+      case "crop": return { imageUrl: "", videoUrl: "", outputUrl: "" };
+      // Outputs
+      case "imageOutput": return { imageUrl: "", prompt: "" };
+      case "reportPreview": return { report: null };
+      case "copyExport": return { copy: null };
+      case "landingPagePreview": return { landingPages: null };
+      case "advertorialPreview": return { headline: "", content: "" };
+      case "imageGallery": return { images: [] };
+      // Utilities
+      case "splitReportSections": return { report: null, sections: [] };
+      case "merge": return { inputs: [] };
+      case "filterByAngle": return { inputValue: null, angle: "fear" };
+      case "platformToggle": return { platform: "google" };
+      default: return { inputValue: "" };
+    }
+  };
+
   const onDrop = useCallback(
     (event: React.DragEvent) => {
       event.preventDefault();
@@ -283,24 +453,7 @@ export default function FlowEditor() {
         id: `${type}-${nodeIdCounter.current++}`,
         type,
         position,
-        data:
-          type === "textInput"
-            ? { value: "" }
-            : type === "imageUpload"
-            ? { imageUrl: "" }
-            : type === "urlInput"
-            ? { value: "", articleText: "" }
-            : type === "imageOutput"
-            ? { imageUrl: "", prompt: "" }
-            : type === "enhanceText"
-            ? { inputValue: "", outputValue: "" }
-            : type === "animate"
-            ? { imageUrl: "", inputValue: "", videoUrl: "" }
-            : type === "textOverlay"
-            ? { imageUrl: "", inputValue: "", outputUrl: "" }
-            : type === "crop"
-            ? { imageUrl: "", videoUrl: "", outputUrl: "" }
-            : { inputValue: "", imageUrl: "", prompt: "", loading: false },
+        data: getInitialData(type),
       };
 
       setNodes((nds) => [...nds, newNode]);
@@ -322,9 +475,10 @@ export default function FlowEditor() {
           width: "240px",
           background: "#fff",
           borderRight: "1px solid #e5e5e5",
-          padding: "24px 16px",
+          padding: "16px 12px",
           display: "flex",
           flexDirection: "column",
+          overflowY: "auto",
         }}
       >
         <div style={{ marginBottom: "32px" }}>
@@ -365,12 +519,12 @@ export default function FlowEditor() {
                 display: "flex",
                 alignItems: "center",
                 gap: "12px",
-                padding: "12px 14px",
+                padding: "8px 10px",
                 background: "#f5f5f7",
-                borderRadius: "12px",
-                marginBottom: "8px",
+                borderRadius: "10px",
+                marginBottom: "4px",
                 cursor: "grab",
-                transition: "background 0.15s, transform 0.15s",
+                transition: "background 0.15s",
               }}
               onMouseEnter={(e) => {
                 e.currentTarget.style.background = "#e8e8ed";
@@ -381,21 +535,21 @@ export default function FlowEditor() {
             >
               <div
                 style={{
-                  width: "32px",
-                  height: "32px",
-                  borderRadius: "8px",
-                  background: "#0071e3",
+                  width: "26px",
+                  height: "26px",
+                  borderRadius: "6px",
+                  background: item.color,
                   color: "#fff",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  fontSize: "14px",
+                  fontSize: "12px",
                   fontWeight: 600,
                 }}
               >
                 {item.icon}
               </div>
-              <span style={{ fontSize: "14px", fontWeight: 500 }}>{item.label}</span>
+              <span style={{ fontSize: "12px", fontWeight: 500 }}>{item.label}</span>
             </div>
           ))}
         </div>
@@ -422,10 +576,10 @@ export default function FlowEditor() {
                 display: "flex",
                 alignItems: "center",
                 gap: "12px",
-                padding: "12px 14px",
+                padding: "8px 10px",
                 background: "#f5f5f7",
-                borderRadius: "12px",
-                marginBottom: "8px",
+                borderRadius: "10px",
+                marginBottom: "4px",
                 cursor: "grab",
                 transition: "background 0.15s",
               }}
@@ -438,26 +592,26 @@ export default function FlowEditor() {
             >
               <div
                 style={{
-                  width: "32px",
-                  height: "32px",
-                  borderRadius: "8px",
+                  width: "26px",
+                  height: "26px",
+                  borderRadius: "6px",
                   background: item.gradient,
                   color: "#fff",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  fontSize: "14px",
+                  fontSize: "12px",
                   fontWeight: 600,
                 }}
               >
                 {item.icon}
               </div>
-              <span style={{ fontSize: "14px", fontWeight: 500 }}>{item.label}</span>
+              <span style={{ fontSize: "12px", fontWeight: 500 }}>{item.label}</span>
             </div>
           ))}
         </div>
 
-        <div style={{ marginBottom: "24px" }}>
+        <div style={{ marginBottom: "16px" }}>
           <h3
             style={{
               fontSize: "11px",
@@ -465,49 +619,110 @@ export default function FlowEditor() {
               color: "#86868b",
               textTransform: "uppercase",
               letterSpacing: "0.5px",
-              marginBottom: "12px",
+              marginBottom: "8px",
             }}
           >
-            Output
+            Outputs
           </h3>
-          <div
-            draggable
-            onDragStart={(e) => onDragStart(e, "imageOutput")}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "12px",
-              padding: "12px 14px",
-              background: "#f5f5f7",
-              borderRadius: "12px",
-              cursor: "grab",
-              transition: "background 0.15s",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = "#e8e8ed";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "#f5f5f7";
-            }}
-          >
+          {outputs.map((item) => (
             <div
+              key={item.type}
+              draggable
+              onDragStart={(e) => onDragStart(e, item.type)}
               style={{
-                width: "32px",
-                height: "32px",
-                borderRadius: "8px",
-                background: "linear-gradient(135deg, #11998e 0%, #38ef7d 100%)",
-                color: "#fff",
                 display: "flex",
                 alignItems: "center",
-                justifyContent: "center",
-                fontSize: "14px",
-                fontWeight: 600,
+                gap: "12px",
+                padding: "8px 10px",
+                background: "#f5f5f7",
+                borderRadius: "10px",
+                marginBottom: "4px",
+                cursor: "grab",
+                transition: "background 0.15s",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "#e8e8ed";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "#f5f5f7";
               }}
             >
-              O
+              <div
+                style={{
+                  width: "26px",
+                  height: "26px",
+                  borderRadius: "6px",
+                  background: item.gradient,
+                  color: "#fff",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: "12px",
+                  fontWeight: 600,
+                }}
+              >
+                {item.icon}
+              </div>
+              <span style={{ fontSize: "12px", fontWeight: 500 }}>{item.label}</span>
             </div>
-            <span style={{ fontSize: "14px", fontWeight: 500 }}>Output</span>
-          </div>
+          ))}
+        </div>
+
+        <div style={{ marginBottom: "16px" }}>
+          <h3
+            style={{
+              fontSize: "11px",
+              fontWeight: 600,
+              color: "#86868b",
+              textTransform: "uppercase",
+              letterSpacing: "0.5px",
+              marginBottom: "8px",
+            }}
+          >
+            Utilities
+          </h3>
+          {utilities.map((item) => (
+            <div
+              key={item.type}
+              draggable
+              onDragStart={(e) => onDragStart(e, item.type)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "12px",
+                padding: "8px 10px",
+                background: "#f5f5f7",
+                borderRadius: "10px",
+                marginBottom: "4px",
+                cursor: "grab",
+                transition: "background 0.15s",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "#e8e8ed";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "#f5f5f7";
+              }}
+            >
+              <div
+                style={{
+                  width: "26px",
+                  height: "26px",
+                  borderRadius: "6px",
+                  background: item.gradient,
+                  color: "#fff",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: "12px",
+                  fontWeight: 600,
+                }}
+              >
+                {item.icon}
+              </div>
+              <span style={{ fontSize: "12px", fontWeight: 500 }}>{item.label}</span>
+            </div>
+          ))}
         </div>
 
         <div style={{ marginTop: "auto", paddingTop: "24px", borderTop: "1px solid #e5e5e5" }}>

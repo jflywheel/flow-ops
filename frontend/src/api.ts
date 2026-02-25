@@ -154,3 +154,319 @@ export async function animateImage(imageUrl: string, prompt?: string, aspectRati
   const data = await res.json();
   return data.videoUrl;
 }
+
+// Transcribe audio to text
+export async function transcribe(
+  audioUrl?: string,
+  audioBase64?: string,
+  mimeType?: string
+): Promise<{ transcript: string }> {
+  const token = getToken();
+
+  const res = await fetch(`${API_BASE}/operations/transcribe`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ audioUrl, audioBase64, mimeType }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to transcribe audio");
+  }
+
+  return res.json();
+}
+
+// Generate report from transcript
+export async function generateReport(
+  transcript: string,
+  episodeTitle?: string
+): Promise<{ executiveSummary: string; sections: Array<{ title: string; content: string }> }> {
+  const token = getToken();
+
+  const res = await fetch(`${API_BASE}/operations/generate-report`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ transcript, episodeTitle }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to generate report");
+  }
+
+  return res.json();
+}
+
+// Generate ad copy from report
+export async function generateCopy(
+  report: { executiveSummary: string; sections: Array<{ title: string; content: string }> },
+  platform: string,
+  mode: string
+): Promise<{
+  fear: { headline: string; body: string; cta: string };
+  greed: { headline: string; body: string; cta: string };
+  curiosity: { headline: string; body: string; cta: string };
+  urgency: { headline: string; body: string; cta: string };
+}> {
+  const token = getToken();
+
+  const res = await fetch(`${API_BASE}/operations/generate-copy`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ report, platform, mode }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to generate copy");
+  }
+
+  return res.json();
+}
+
+// Generate landing pages from report
+export async function generateLandingPages(
+  report: { executiveSummary: string; sections: Array<{ title: string; content: string }> },
+  mode: string
+): Promise<{
+  fear: { headline: string; subheadline: string; bullets: string[]; cta: string; heroContent: string };
+  greed: { headline: string; subheadline: string; bullets: string[]; cta: string; heroContent: string };
+  curiosity: { headline: string; subheadline: string; bullets: string[]; cta: string; heroContent: string };
+  urgency: { headline: string; subheadline: string; bullets: string[]; cta: string; heroContent: string };
+}> {
+  const token = getToken();
+
+  const res = await fetch(`${API_BASE}/operations/generate-landing-pages`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ report, mode }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to generate landing pages");
+  }
+
+  return res.json();
+}
+
+// Fetch podcast episode info from URL
+export async function fetchPodcastEpisode(url: string): Promise<{ audioUrl: string; title: string }> {
+  const token = getToken();
+
+  const res = await fetch(`${API_BASE}/operations/podcast-episode`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ url }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to fetch podcast episode");
+  }
+
+  return res.json();
+}
+
+// Parse podcast RSS feed and return episodes
+export async function fetchPodcastRSS(feedUrl: string): Promise<{
+  feedTitle: string;
+  episodes: Array<{ title: string; audioUrl: string; pubDate?: string }>;
+}> {
+  const token = getToken();
+
+  const res = await fetch(`${API_BASE}/operations/podcast-rss`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ feedUrl }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to parse RSS feed");
+  }
+
+  return res.json();
+}
+
+// Fetch stock info by ticker symbol
+export async function fetchStockInfo(ticker: string): Promise<{
+  ticker: string;
+  name: string;
+  price: number;
+  change: number;
+  changePercent: number;
+  fundamentals: {
+    marketCap?: string;
+    peRatio?: number;
+    dividend?: number;
+    volume?: string;
+  };
+}> {
+  const token = getToken();
+
+  const res = await fetch(`${API_BASE}/operations/stock-info`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ ticker }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to fetch stock info");
+  }
+
+  return res.json();
+}
+
+// Generate advertorial from report (FWP pipeline)
+export async function generateAdvertorial(report: Record<string, unknown>): Promise<{ headline: string; content: string }> {
+  const token = getToken();
+
+  const res = await fetch(`${API_BASE}/operations/generate-advertorial`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ report }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to generate advertorial");
+  }
+
+  return res.json();
+}
+
+// Ad copy angle structure for advertorial copy
+interface AdAngle {
+  primaryText: string;
+  headline: string;
+}
+
+interface AdCopyResult {
+  fear: AdAngle;
+  greed: AdAngle;
+  curiosity: AdAngle;
+  urgency: AdAngle;
+}
+
+// Generate Meta ad copy from advertorial content (FWP pipeline)
+export async function generateAdvertorialCopy(advertorialContent: string): Promise<AdCopyResult> {
+  const token = getToken();
+
+  const res = await fetch(`${API_BASE}/operations/generate-advertorial-copy`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ advertorialContent }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to generate ad copy");
+  }
+
+  return res.json();
+}
+
+// Visual concept structure for ad images
+interface VisualConcept {
+  concept: string;
+  targetEmotion: string;
+  colorScheme: string;
+}
+
+// Generate visual concepts for ad images (FWP pipeline)
+export async function generateVisualConcepts(
+  report: Record<string, unknown>,
+  count: number,
+  mode: string,
+  advertorialContent?: string
+): Promise<{ concepts: VisualConcept[] }> {
+  const token = getToken();
+
+  const res = await fetch(`${API_BASE}/operations/generate-visual-concepts`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ report, count, mode, advertorialContent }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to generate visual concepts");
+  }
+
+  return res.json();
+}
+
+// Summarize text
+export async function summarize(text: string, maxLength?: number): Promise<{ summary: string }> {
+  const token = getToken();
+
+  const res = await fetch(`${API_BASE}/operations/summarize`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ text, maxLength }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to summarize text");
+  }
+
+  return res.json();
+}
+
+// Extract key points from text
+export async function extractKeyPoints(text: string, maxPoints?: number): Promise<{ points: string[] }> {
+  const token = getToken();
+
+  const res = await fetch(`${API_BASE}/operations/extract-key-points`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ text, maxPoints }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to extract key points");
+  }
+
+  return res.json();
+}

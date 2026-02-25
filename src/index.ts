@@ -8,6 +8,49 @@ interface SecretStoreSecret {
 interface Env {
   FWP_GEMINI_API_KEY: SecretStoreSecret;
   FWP_OPENAI_API_KEY: SecretStoreSecret;
+  FWP_ANTHROPIC_API_KEY: SecretStoreSecret;
+}
+
+// Types for landing page and advertorial endpoints
+interface ReportSection {
+  id: string;
+  title: string;
+  hook: string;
+  content: string;
+  stockPicks?: string[];
+  keyNumbers?: string[];
+}
+
+interface ReportObject {
+  title: string;
+  date: string;
+  executiveSummary: string;
+  sections: ReportSection[];
+}
+
+interface LandingPage {
+  headline: string;
+  bulletPoints: Array<{ title: string; description: string }>;
+  closingParagraph: string;
+}
+
+interface LandingPagesResponse {
+  fear: LandingPage;
+  greed: LandingPage;
+  curiosity: LandingPage;
+  urgency: LandingPage;
+}
+
+interface AdCopy {
+  primaryText: string;
+  headline: string;
+}
+
+interface AdCopyResponse {
+  fear: AdCopy;
+  greed: AdCopy;
+  curiosity: AdCopy;
+  urgency: AdCopy;
 }
 
 // Simple auth token (hardcoded for dog/dog)
@@ -265,7 +308,7 @@ Keep it under 200 words. Only output the prompt itself, no explanations.${extraP
 
         const parts = imageData.candidates?.[0]?.content?.parts || [];
         const imagePart = parts.find(p => p.inlineData || p.inline_data);
-        const inlineData = imagePart?.inlineData || imagePart?.inline_data;
+        const inlineData = (imagePart?.inlineData || imagePart?.inline_data) as { mimeType?: string; mime_type?: string; data?: string } | undefined;
         const b64 = inlineData?.data;
         const mimeType = inlineData?.mimeType || inlineData?.mime_type || "image/png";
         imageUrl = b64 ? `data:${mimeType};base64,${b64}` : "";
@@ -775,6 +818,1662 @@ ${truncatedText}`;
         const result = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "";
 
         return Response.json({ result }, { headers: corsHeaders });
+      }
+
+      // Transcribe operation - transcribes audio using Gemini 2.5 Flash
+      if (path === "/api/operations/transcribe" && request.method === "POST") {
+        const body = await request.json() as { audioUrl?: string; audioBase64?: string; mimeType?: string };
+
+        // Validate input: need either audioUrl or audioBase64
+        if (!body.audioUrl && !body.audioBase64) {
+          return Response.json(
+            { error: "Missing audioUrl or audioBase64 field", code: "MISSING_AUDIO" },
+            { status: 400, headers: corsHeaders }
+          );
+        }
+
+        const geminiKey = await env.FWP_GEMINI_API_KEY.get();
+
+        let audioBase64 = "";
+        let mimeType = body.mimeType || "audio/mpeg";
+
+        if (body.audioBase64) {
+          // Use provided base64 directly
+          audioBase64 = body.audioBase64;
+        } else if (body.audioUrl) {
+          // Fetch audio from URL
+          console.log("Fetching audio from URL:", body.audioUrl);
+          try {
+            const audioResponse = await fetch(body.audioUrl);
+            if (!audioResponse.ok) {
+              return Response.json(
+                { error: `Failed to fetch audio: HTTP ${audioResponse.status}`, code: "AUDIO_FETCH_ERROR" },
+                { status: 500, headers: corsHeaders }
+              );
+            }
+
+            // Detect mime type from Content-Type header or URL
+            const contentType = audioResponse.headers.get("Content-Type");
+            if (contentType) {
+              mimeType = contentType.split(";")[0].trim();
+            } else if (body.audioUrl.endsWith(".mp3")) {
+              mimeType = "audio/mpeg";
+            } else if (body.audioUrl.endsWith(".wav")) {
+              mimeType = "audio/wav";
+            } else if (body.audioUrl.endsWith(".m4a")) {
+              mimeType = "audio/mp4";
+            }
+
+            // Convert to base64
+            const audioBuffer = await audioResponse.arrayBuffer();
+            audioBase64 = btoa(
+              new Uint8Array(audioBuffer).reduce((data, byte) => data + String.fromCharCode(byte), "")
+            );
+            console.log("Audio fetched, size:", audioBuffer.byteLength, "bytes, mimeType:", mimeType);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : "Fetch failed";
+            return Response.json(
+              { error: `Failed to fetch audio: ${message}`, code: "AUDIO_FETCH_ERROR" },
+              { status: 500, headers: corsHeaders }
+            );
+          }
+        }
+
+        // Call Gemini 2.5 Flash for transcription
+        const transcribePrompt = `Transcribe the following audio file accurately. Output only the transcript text, with no additional commentary, timestamps, or speaker labels. Preserve natural paragraph breaks where appropriate.`;
+
+        const geminiResponse = await fetch(
+          "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+          {
+            method: "POST",
+            headers: {
+              "x-goog-api-key": geminiKey,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              contents: [{
+                parts: [
+                  { text: transcribePrompt },
+                  {
+                    inlineData: {
+                      mimeType: mimeType,
+                      data: audioBase64
+                    }
+                  }
+                ]
+              }],
+            }),
+          }
+        );
+
+        if (!geminiResponse.ok) {
+          const errorText = await geminiResponse.text();
+          console.error("Gemini API error:", errorText);
+          return Response.json(
+            { error: "Failed to transcribe audio", code: "GEMINI_ERROR", details: errorText },
+            { status: 500, headers: corsHeaders }
+          );
+        }
+
+        const geminiData = await geminiResponse.json() as {
+          candidates?: Array<{
+            content?: { parts?: Array<{ text?: string }> };
+          }>;
+        };
+
+        const transcript = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "";
+
+        if (!transcript) {
+          return Response.json(
+            { error: "No transcript returned", code: "NO_TRANSCRIPT" },
+            { status: 500, headers: corsHeaders }
+          );
+        }
+
+        return Response.json({ transcript }, { headers: corsHeaders });
+      }
+
+      // Generate report operation - creates investment report from transcript using Claude
+      if (path === "/api/operations/generate-report" && request.method === "POST") {
+        const body = await request.json() as { transcript?: string; episodeTitle?: string };
+
+        if (!body.transcript) {
+          return Response.json(
+            { error: "Missing transcript field", code: "MISSING_TRANSCRIPT" },
+            { status: 400, headers: corsHeaders }
+          );
+        }
+
+        const episodeTitle = body.episodeTitle || "Investment Report";
+        const anthropicKey = await env.FWP_ANTHROPIC_API_KEY.get();
+
+        // Get today's date for the prompt
+        const today = new Date().toLocaleDateString("en-US", {
+          year: "numeric",
+          month: "long",
+          day: "numeric"
+        });
+
+        // Build the prompt from FWP-PROMPT-REFERENCE.md section 1
+        const prompt = `You are a senior financial analyst creating a premium investment research report for 247 Wall St. This report will be offered as a free lead magnet, so it must feel valuable enough that someone would give their email address to receive it.
+
+Today's date: ${today}
+Episode: "${episodeTitle}"
+
+TRANSCRIPT:
+${body.transcript.slice(0, 50000)}
+
+YOUR MISSION:
+Transform this podcast transcript into a high-value research report that feels like premium financial analysis. Think of reports from top-tier investment research firms: structured, authoritative, data-driven, and immediately actionable.
+
+EXECUTIVE SUMMARY GUIDELINES:
+Write a compelling 3-4 sentence executive summary that:
+- Positions the report as timely and essential for investors right now
+- Highlights the most important findings or opportunities discussed
+- Creates urgency without being hypey (focus on market conditions, timing, opportunities)
+- Sounds professional and authoritative
+
+SECTION STRUCTURE GUIDELINES:
+Create 6-12 sections depending on the content. Each section should be a complete, standalone mini-report that delivers real value.
+
+For each section:
+
+1. **Title**: Professional and descriptive. Not clickbait. Examples:
+   - "The 7 Technology Stocks Positioned for AI Dominance"
+   - "Three Undervalued Dividend Plays in Healthcare"
+   - "Why the Federal Reserve's Next Move Matters for Your Portfolio"
+
+2. **Hook**: The attention-grabbing angle for ads/marketing. This is your most compelling, curiosity-driven version:
+   - "The 7 tech stocks Wall Street insiders are quietly accumulating"
+   - "3 dividend stocks yielding 5%+ that most investors don't know about"
+   - "What the Fed's next decision means for your retirement savings"
+
+3. **Content**: Write 300-500 words of substantive analysis that delivers on the promise. Structure it like this:
+   - Opening: Why this matters now (market context, timing, relevance)
+   - Core analysis: The specific stocks, strategies, or insights promised
+   - Details: For each stock/idea mentioned, provide:
+     * Ticker symbol and company name
+     * Key fundamentals (P/E, yield, growth rate, market cap, etc.)
+     * The investment thesis (why it's attractive)
+     * Specific catalysts or risks
+   - Closing: Actionable takeaway (what investors should consider doing)
+
+   Make the content feel cohesive and uniquely valuable. Don't just transcribe what was said - synthesize it into professional research analysis. Use specific numbers, percentages, dollar amounts, and dates.
+
+4. **Stock Picks**: Include ALL tickers mentioned in that section
+
+5. **Key Numbers**: Extract compelling data points like:
+   - "$2.3 trillion market opportunity"
+   - "Trading at 12x earnings (30% below sector average)"
+   - "Dividend yield of 5.2%"
+   - "Projected 25% revenue growth in 2026"
+
+STYLE GUIDELINES:
+- Professional, authoritative tone (like you're a veteran Wall Street analyst)
+- Data-driven and specific (use numbers, percentages, dates)
+- Balanced perspective (acknowledge both opportunities AND risks where relevant)
+- Use plain ASCII only (no em-dashes, curly quotes, special characters)
+- Write in paragraphs (break dense content into digestible chunks)
+- Avoid hype words like "revolutionary" or "game-changing"
+- Instead use specific, factual language: "positioned for 25% growth" or "trading at significant discount to peers"
+
+ACCURACY REQUIREMENT:
+Only include information actually discussed in the transcript. Do not invent stock picks, numbers, or analysis. If the podcast is vague about details, acknowledge that in the content (e.g., "While specific valuation targets weren't provided, the key drivers include...")
+
+Respond in this exact JSON format:
+{
+  "executiveSummary": "A compelling 3-4 sentence executive summary...",
+  "sections": [
+    {
+      "id": "section-1",
+      "title": "Professional descriptive title (not clickbait)",
+      "hook": "The attention-grabbing marketing angle",
+      "content": "300-500 words of substantive investment analysis...",
+      "stockPicks": ["AAPL", "MSFT", "GOOGL"],
+      "keyNumbers": ["$2.3 trillion market", "12x P/E ratio", "5.2% dividend yield"]
+    }
+  ]
+}`;
+
+        // Call Anthropic API
+        const anthropicResponse = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "x-api-key": anthropicKey,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 8000,
+            messages: [{ role: "user", content: prompt }],
+          }),
+        });
+
+        if (!anthropicResponse.ok) {
+          const errorText = await anthropicResponse.text();
+          console.error("Anthropic API error:", errorText);
+          return Response.json(
+            { error: "Failed to generate report", code: "ANTHROPIC_ERROR", details: errorText },
+            { status: 500, headers: corsHeaders }
+          );
+        }
+
+        const anthropicData = await anthropicResponse.json() as {
+          content?: Array<{ type: string; text?: string }>;
+        };
+
+        const responseText = anthropicData.content?.find(c => c.type === "text")?.text || "";
+
+        if (!responseText) {
+          return Response.json(
+            { error: "No response from Claude", code: "NO_RESPONSE" },
+            { status: 500, headers: corsHeaders }
+          );
+        }
+
+        // Parse the JSON response from Claude
+        let reportData: { executiveSummary: string; sections: Array<ReportSection> };
+        try {
+          // Claude might wrap the JSON in markdown code blocks, so strip those
+          let jsonText = responseText;
+          if (jsonText.includes("```json")) {
+            jsonText = jsonText.replace(/```json\n?/g, "").replace(/```\n?/g, "");
+          } else if (jsonText.includes("```")) {
+            jsonText = jsonText.replace(/```\n?/g, "");
+          }
+          reportData = JSON.parse(jsonText.trim());
+        } catch (err) {
+          console.error("Failed to parse Claude response as JSON:", err);
+          return Response.json(
+            { error: "Failed to parse report response", code: "PARSE_ERROR", rawResponse: responseText },
+            { status: 500, headers: corsHeaders }
+          );
+        }
+
+        return Response.json({
+          executiveSummary: reportData.executiveSummary,
+          sections: reportData.sections
+        }, { headers: corsHeaders });
+      }
+
+      // Generate copy operation - creates ad headlines and descriptions using Claude
+      if (path === "/api/operations/generate-copy" && request.method === "POST") {
+        // Input type for this endpoint (report structure from generate-report)
+        interface CopyGenerateReport {
+          executiveSummary: string;
+          sections: ReportSection[];
+        }
+
+        interface CopyGenerateRequest {
+          report?: CopyGenerateReport;
+          platform?: "google" | "meta";
+          mode?: "report" | "newsletter";
+        }
+
+        const body = await request.json() as CopyGenerateRequest;
+
+        if (!body.report) {
+          return Response.json(
+            { error: "Missing report field", code: "MISSING_REPORT" },
+            { status: 400, headers: corsHeaders }
+          );
+        }
+
+        if (!body.platform || !["google", "meta"].includes(body.platform)) {
+          return Response.json(
+            { error: "Invalid platform. Must be 'google' or 'meta'", code: "INVALID_PLATFORM" },
+            { status: 400, headers: corsHeaders }
+          );
+        }
+
+        if (!body.mode || !["report", "newsletter"].includes(body.mode)) {
+          return Response.json(
+            { error: "Invalid mode. Must be 'report' or 'newsletter'", code: "INVALID_MODE" },
+            { status: 400, headers: corsHeaders }
+          );
+        }
+
+        const anthropicKey = await env.FWP_ANTHROPIC_API_KEY.get();
+        const report = body.report;
+        const platform = body.platform;
+        const mode = body.mode;
+
+        // Build context from report sections
+        const allStocks = report.sections.flatMap(s => s.stockPicks || []);
+        const allNumbers = report.sections.flatMap(s => s.keyNumbers || []);
+        const sectionsContext = report.sections
+          .map(s => `SECTION: ${s.title}\nHOOK: ${s.hook}\nKEY NUMBERS: ${(s.keyNumbers || []).join(", ")}\nSTOCKS: ${(s.stockPicks || []).join(", ")}`)
+          .join("\n\n");
+
+        // Get today's date
+        const today = new Date().toLocaleDateString("en-US", {
+          year: "numeric",
+          month: "long",
+          day: "numeric",
+        });
+
+        // Build the appropriate prompt based on mode and platform
+        let prompt = "";
+
+        if (mode === "report" && platform === "google") {
+          // 2a: Report Mode + Google Platform
+          prompt = `You are a direct response copywriter creating Google Demand Gen ad copy for 24/7 Wall St, a financial news and investing site. Your goal is to drive clicks to a free investment report.
+
+TODAY'S DATE: ${today}
+
+REPORT TITLE: "Investment Report"
+EXECUTIVE SUMMARY: ${report.executiveSummary}
+
+ALL STOCKS MENTIONED: ${allStocks.join(", ") || "Various stocks"}
+KEY NUMBERS: ${allNumbers.join(", ") || "Multiple data points"}
+
+REPORT SECTIONS:
+${sectionsContext}
+
+===== GOOGLE ADS COMPLIANCE - CRITICAL =====
+Google REJECTS ads with "Unreliable claims" in financial services. You MUST avoid:
+
+BANNED WORDS/PHRASES (will get rejected):
+- "profit", "profits", "profiting"
+- "gains", "returns", "make money"
+- "price targets", "target price"
+- "missed gains", "missing out on money"
+- "guaranteed", "proven"
+- Any promise of financial outcomes
+
+SAFE ALTERNATIVES TO USE:
+- Instead of "profit": use "informed", "ahead", "prepared"
+- Instead of "gains": use "opportunities", "moves", "trends"
+- Instead of "price targets": use "analysis", "research", "recommendations"
+- Instead of "make money": use "make decisions", "take action"
+- Focus on INFORMATION received, not MONEY made
+============================================
+
+YOUR TASK:
+Generate Google Demand Gen ad copy grouped by 4 ANGLES. Each angle targets a different psychological trigger.
+
+ANGLES (reframed for Google compliance):
+1. FEAR - Missing information, being uninformed, market risks ("Oracle down 53%", "Market warning signs")
+2. GREED - Getting valuable research for free, expert analysis ("Free expert analysis", "$4T market opportunity")
+3. CURIOSITY - Hidden info, secrets, what others don't know ("Hidden opportunity", "What Wall St isn't saying")
+4. URGENCY - Time pressure, timely analysis ("Before market opens", "Q4 window closing")
+
+STRICT CHARACTER LIMITS (Google will reject ads that exceed these):
+- Headlines: EXACTLY 30 characters or less
+- Descriptions: EXACTLY 90 characters or less
+
+GENERATE FOR EACH ANGLE:
+- 5 headlines (30 chars max each)
+- 5 descriptions (90 chars max each)
+Total: 20 headlines, 20 descriptions across 4 angles
+
+WRITING STYLE:
+- Use sentence case (first letter capitalized, rest lowercase)
+- NOT Title Case Like This
+- No em-dashes, use commas or periods
+- No "not X, but Y" phrasing
+- ASCII characters only
+- Professional financial tone
+- Focus on INFORMATION, never on profits/gains
+
+Respond in JSON format with fear, greed, curiosity, urgency objects containing headlines and descriptions arrays.`;
+        } else if (mode === "report" && platform === "meta") {
+          // 2b: Report Mode + Meta Platform
+          prompt = `You are a direct response copywriter creating Meta/Facebook ad copy for 24/7 Wall St, a financial news and investing site. Your goal is to drive clicks to a free investment report.
+
+TODAY'S DATE: ${today}
+
+REPORT TITLE: "Investment Report"
+EXECUTIVE SUMMARY: ${report.executiveSummary}
+
+ALL STOCKS MENTIONED: ${allStocks.join(", ") || "Various stocks"}
+KEY NUMBERS: ${allNumbers.join(", ") || "Multiple data points"}
+
+REPORT SECTIONS:
+${sectionsContext}
+
+YOUR TASK:
+Generate Meta/Facebook ad copy grouped by 4 ANGLES. Each angle targets a different psychological trigger.
+
+ANGLES (be aggressive - Meta allows profit/gains language):
+1. FEAR - Loss aversion, crashes, what they're missing, risks ("Oracle Down 53%", "Wall St Panic", "Missed gains")
+2. GREED - Gains, profits, upside potential ("495% gains", "$4T opportunity", "10X returns possible")
+3. CURIOSITY - Hidden info, secrets, what others don't know ("Hidden Tech Rockets", "What Wall St Won't Tell You")
+4. URGENCY - Time pressure, act now, limited window ("Before Market Opens", "Q4 Window Closing")
+
+STRICT CHARACTER LIMITS:
+- Headlines: EXACTLY 40 characters or less
+- Primary text (descriptions): EXACTLY 125 characters or less
+
+GENERATE FOR EACH ANGLE:
+- 5 headlines (40 chars max each)
+- 5 descriptions (125 chars max each)
+Total: 20 headlines, 20 descriptions across 4 angles
+
+WRITING STYLE:
+- Use sentence case
+- No em-dashes, use commas or periods
+- ASCII characters only
+- Aggressive, emotional direct response tone
+- Focus on PROFITS and GAINS - be bold
+
+Respond in JSON format.`;
+        } else if (mode === "newsletter" && platform === "google") {
+          // 2c: Newsletter Mode + Google Platform
+          prompt = `You are a direct response copywriter creating Google Demand Gen ad copy for 24/7 Wall St's free newsletter "The Daily Profit". Your goal is to drive newsletter signups.
+
+TODAY'S DATE: ${today}
+
+NEWSLETTER: "The Daily Profit" - Free daily investment newsletter from 24/7 Wall St
+
+BONUS REPORT CONTEXT (mention briefly if relevant):
+EXECUTIVE SUMMARY: ${report.executiveSummary}
+
+STOCKS MENTIONED: ${allStocks.join(", ") || "Various stocks"}
+KEY NUMBERS: ${allNumbers.join(", ") || "Multiple data points"}
+
+REPORT SECTIONS:
+${sectionsContext}
+
+===== GOOGLE ADS COMPLIANCE - CRITICAL =====
+Google REJECTS ads with "Unreliable claims" in financial services. You MUST avoid:
+
+BANNED WORDS/PHRASES (will get rejected):
+- "profit", "profits", "profiting" (newsletter name "Daily Profit" is OK, but don't use the word elsewhere)
+- "gains", "returns", "make money"
+- "price targets", "target price"
+- "missed gains", "missing out on money"
+- "guaranteed", "proven"
+- Any promise of financial outcomes
+
+SAFE ALTERNATIVES TO USE:
+- Instead of "profit": use "informed", "ahead", "prepared"
+- Instead of "gains": use "opportunities", "moves", "trends"
+- Instead of "price targets": use "analysis", "research", "recommendations"
+- Instead of "make money": use "make decisions", "take action"
+- Focus on INFORMATION received, not MONEY made
+============================================
+
+YOUR TASK:
+Generate Google Demand Gen ad copy grouped by 4 ANGLES. Each angle targets a different psychological trigger.
+
+ANGLES (reframed for Google compliance):
+1. FEAR - Missing information, being uninformed, market risks
+2. GREED - Getting valuable research for free, expert analysis
+3. CURIOSITY - Hidden info, secrets, what others don't know
+4. URGENCY - Time pressure, timely analysis
+
+STRICT CHARACTER LIMITS (Google will reject ads that exceed these):
+- Headlines: EXACTLY 30 characters or less
+- Descriptions: EXACTLY 90 characters or less
+
+GENERATE FOR EACH ANGLE:
+- 5 headlines (30 chars max each)
+- 5 descriptions (90 chars max each)
+Total: 20 headlines, 20 descriptions across 4 angles
+
+WRITING STYLE:
+- Use sentence case (first letter capitalized, rest lowercase)
+- NOT Title Case Like This
+- No em-dashes, use commas or periods
+- No "not X, but Y" phrasing
+- ASCII characters only
+- Professional financial tone
+- Focus on INFORMATION, never on profits/gains
+
+Respond in JSON format with fear, greed, curiosity, urgency objects containing headlines and descriptions arrays.`;
+        } else {
+          // 2d: Newsletter Mode + Meta Platform
+          prompt = `You are a direct response copywriter creating Meta/Facebook ad copy for 24/7 Wall St's free newsletter "The Daily Profit". Your goal is to drive newsletter signups.
+
+TODAY'S DATE: ${today}
+
+NEWSLETTER: "The Daily Profit" - Free daily investment newsletter from 24/7 Wall St
+
+BONUS REPORT CONTEXT (mention briefly if relevant):
+EXECUTIVE SUMMARY: ${report.executiveSummary}
+
+STOCKS MENTIONED: ${allStocks.join(", ") || "Various stocks"}
+KEY NUMBERS: ${allNumbers.join(", ") || "Multiple data points"}
+
+REPORT SECTIONS:
+${sectionsContext}
+
+YOUR TASK:
+Generate Meta/Facebook ad copy grouped by 4 ANGLES. Each angle targets a different psychological trigger.
+
+ANGLES (be aggressive - Meta allows profit/gains language):
+1. FEAR - Loss aversion, crashes, what they're missing, risks
+2. GREED - Gains, profits, upside potential
+3. CURIOSITY - Hidden info, secrets, what others don't know
+4. URGENCY - Time pressure, act now, limited window
+
+STRICT CHARACTER LIMITS:
+- Headlines: EXACTLY 40 characters or less
+- Primary text (descriptions): EXACTLY 125 characters or less
+
+GENERATE FOR EACH ANGLE:
+- 5 headlines (40 chars max each)
+- 5 descriptions (125 chars max each)
+Total: 20 headlines, 20 descriptions across 4 angles
+
+WRITING STYLE:
+- Use sentence case
+- No em-dashes, use commas or periods
+- ASCII characters only
+- Aggressive, emotional direct response tone
+- Focus on PROFITS and GAINS - be bold
+
+Respond in JSON format with fear, greed, curiosity, urgency objects containing headlines and descriptions arrays.`;
+        }
+
+        // Call Claude API
+        const response = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "x-api-key": anthropicKey,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 4000,
+            messages: [{ role: "user", content: prompt }],
+          }),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error("Claude API error:", errorText);
+          return Response.json(
+            { error: "Failed to generate copy", code: "CLAUDE_ERROR", details: errorText },
+            { status: 500, headers: corsHeaders }
+          );
+        }
+
+        const claudeData = await response.json() as {
+          content?: Array<{ type: string; text?: string }>;
+        };
+
+        const textContent = claudeData.content?.find(c => c.type === "text");
+        const rawText = textContent?.text || "";
+
+        if (!rawText) {
+          return Response.json(
+            { error: "Empty response from Claude", code: "EMPTY_RESPONSE" },
+            { status: 500, headers: corsHeaders }
+          );
+        }
+
+        // Parse JSON from Claude's response (it may be wrapped in markdown code blocks)
+        let jsonText = rawText;
+        const jsonMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)```/);
+        if (jsonMatch) {
+          jsonText = jsonMatch[1].trim();
+        }
+
+        try {
+          const copyResult = JSON.parse(jsonText) as {
+            fear: { headlines: string[]; descriptions: string[] };
+            greed: { headlines: string[]; descriptions: string[] };
+            curiosity: { headlines: string[]; descriptions: string[] };
+            urgency: { headlines: string[]; descriptions: string[] };
+          };
+
+          return Response.json(copyResult, { headers: corsHeaders });
+        } catch (parseError) {
+          console.error("Failed to parse Claude response as JSON:", rawText);
+          return Response.json(
+            { error: "Failed to parse copy response", code: "PARSE_ERROR", raw: rawText },
+            { status: 500, headers: corsHeaders }
+          );
+        }
+      }
+
+      // Generate landing pages operation - creates 4 landing pages for different psychological angles
+      if (path === "/api/operations/generate-landing-pages" && request.method === "POST") {
+        const body = await request.json() as { report?: ReportObject; mode?: "report" | "newsletter" };
+
+        if (!body.report) {
+          return Response.json(
+            { error: "Missing report field", code: "MISSING_REPORT" },
+            { status: 400, headers: corsHeaders }
+          );
+        }
+
+        const report = body.report;
+        const mode = body.mode || "report";
+        const anthropicKey = await env.FWP_ANTHROPIC_API_KEY.get();
+        const today = new Date().toISOString().split("T")[0];
+
+        // Build sections context from report
+        const sectionsContext = report.sections.map((s, i) =>
+          `Section ${i + 1}: "${s.title}"\nHook: ${s.hook}\nStocks: ${s.stockPicks?.join(", ") || "None"}\nKey Numbers: ${s.keyNumbers?.join(", ") || "None"}`
+        ).join("\n\n");
+
+        // Collect all key numbers from sections
+        const allKeyNumbers = report.sections.flatMap(s => s.keyNumbers || []);
+
+        let systemPrompt: string;
+
+        if (mode === "newsletter") {
+          // 3b: Newsletter Mode Landing Pages (Google Compliant)
+          systemPrompt = `You are creating 4 direct response landing pages for 24/7 Wall St's free newsletter "The Daily Profit", each targeting a different psychological angle.
+
+TODAY'S DATE: ${today}
+
+===== GOOGLE ADS COMPLIANCE - CRITICAL =====
+These landing pages are used with Google Ads. Google REJECTS pages with "Unreliable claims."
+
+BANNED WORDS/PHRASES (will get rejected):
+- "profit", "profits", "profiting" (even though newsletter is called "Daily Profit", avoid using the word elsewhere)
+- "gains", "returns", "make money"
+- "price targets", "target price"
+- Any promise of financial outcomes or guaranteed results
+
+SAFE ALTERNATIVES:
+- Instead of "profit from news": "act on news", "understand what matters"
+- Instead of "price targets": "analysis", "research", "recommendations"
+- Instead of "make money": "make informed decisions", "stay ahead"
+- Focus on INFORMATION and ANALYSIS, not financial outcomes
+============================================
+
+WHAT THE DAILY PROFIT OFFERS:
+- Free daily email from 24/7 Wall St
+- Daily stock analysis and actionable research
+- Covers stocks, ETFs, and crypto with specific recommendations
+- Expert analysis from a team with 15+ years experience
+- Goes beyond headlines to explain what matters for investors
+
+BONUS REPORT TITLE (mention briefly at end): "${report.title}"
+
+Create 4 landing pages. Focus on the VALUE of expert analysis and research. The report is a signup bonus, mentioned only briefly in closing.
+
+ANGLES (reframed for compliance):
+1. FEAR - Missing important market analysis, being uninformed while others act on research
+2. GREED - Getting valuable expert research for free, daily analysis others pay for
+3. CURIOSITY - What expert analysts see that headlines miss, the research behind the news
+4. URGENCY - Markets move daily, get timely analysis before the market opens
+
+BULLET POINT REQUIREMENTS (critical):
+- ALL 3 bullets must be about the NEWSLETTER's ongoing value
+- Focus on: daily analysis, expert research, actionable recommendations, going beyond headlines
+- Do NOT mention the bonus report in bullets
+- NEVER use banned words (profit, gains, price targets, etc.)`;
+        } else {
+          // 3a: Report Mode Landing Pages
+          systemPrompt = `You are creating 4 direct response landing pages for 24/7 Wall St, each targeting a different psychological angle.
+
+TODAY'S DATE: ${today}
+
+REPORT TITLE: "${report.title}"
+EXECUTIVE SUMMARY: ${report.executiveSummary}
+
+REPORT SECTIONS:
+${sectionsContext}
+
+KEY NUMBERS FROM REPORT: ${allKeyNumbers.join(", ") || "Various data points"}
+
+Create 4 landing pages, one for each ANGLE:
+1. FEAR - Loss aversion, crashes, risks, what they're missing
+2. GREED - Gains, profits, upside potential, wealth building
+3. CURIOSITY - Hidden info, secrets, what others don't know
+4. URGENCY - Time pressure, act now, limited window
+
+Each page needs: headline, 3 bulletPoints, closingParagraph.
+The MAIN OFFER is this specific report.
+
+Respond in this exact JSON format:
+{
+  "fear": {
+    "headline": "Fear-focused headline emphasizing risks or losses",
+    "bulletPoints": [
+      {"title": "Short title", "description": "Fear-focused description"},
+      {"title": "Short title", "description": "Fear-focused description"},
+      {"title": "Short title", "description": "Fear-focused description"}
+    ],
+    "closingParagraph": "Fear-focused urgency paragraph"
+  },
+  "greed": { ... },
+  "curiosity": { ... },
+  "urgency": { ... }
+}
+
+CRITICAL JSON RULES:
+- Output ONLY valid JSON, no markdown, no explanation
+- Do NOT use quotes inside string values
+- No emdashes, use commas or periods instead
+- ASCII characters only
+
+WRITING RULES:
+- Be specific with numbers when available
+- Professional financial services tone
+- Each angle should feel distinctly different`;
+        }
+
+        // Call Anthropic API with Claude Haiku (cheaper for this task)
+        const anthropicResponse = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "x-api-key": anthropicKey,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "claude-3-haiku-20240307",
+            max_tokens: 4000,
+            messages: [
+              {
+                role: "user",
+                content: systemPrompt,
+              },
+            ],
+          }),
+        });
+
+        if (!anthropicResponse.ok) {
+          const errorText = await anthropicResponse.text();
+          console.error("Anthropic API error:", errorText);
+          return Response.json(
+            { error: "Failed to generate landing pages", code: "ANTHROPIC_ERROR" },
+            { status: 500, headers: corsHeaders }
+          );
+        }
+
+        const anthropicData = await anthropicResponse.json() as {
+          content?: Array<{ type: string; text?: string }>;
+        };
+
+        const responseText = anthropicData.content?.[0]?.text || "";
+
+        if (!responseText) {
+          return Response.json(
+            { error: "Empty response from AI", code: "EMPTY_RESPONSE" },
+            { status: 500, headers: corsHeaders }
+          );
+        }
+
+        // Parse the JSON response
+        let landingPages: LandingPagesResponse;
+        try {
+          landingPages = JSON.parse(responseText);
+        } catch {
+          console.error("Failed to parse landing pages JSON:", responseText);
+          return Response.json(
+            { error: "Invalid JSON response from AI", code: "PARSE_ERROR" },
+            { status: 500, headers: corsHeaders }
+          );
+        }
+
+        return Response.json(landingPages, { headers: corsHeaders });
+      }
+
+      // Generate advertorial operation - creates long-form advertorial article
+      if (path === "/api/operations/generate-advertorial" && request.method === "POST") {
+        const body = await request.json() as { report?: ReportObject };
+
+        if (!body.report) {
+          return Response.json(
+            { error: "Missing report field", code: "MISSING_REPORT" },
+            { status: 400, headers: corsHeaders }
+          );
+        }
+
+        const report = body.report;
+        const anthropicKey = await env.FWP_ANTHROPIC_API_KEY.get();
+        const today = new Date().toISOString().split("T")[0];
+
+        // Build section summaries for the prompt
+        const sectionSummaries = report.sections.map((s, i) =>
+          `${i + 1}. ${s.title}\nHook: ${s.hook}\nContent preview: ${s.content.slice(0, 300)}...\nStocks: ${s.stockPicks?.join(", ") || "None"}\nKey Numbers: ${s.keyNumbers?.join(", ") || "None"}`
+        ).join("\n\n");
+
+        // Framing elements (derived from report content)
+        const framing = {
+          hook: `Open with a relatable FOMO moment about the main topic from this report: "${report.title}". Reference specific numbers or stocks if available.`,
+          stakes: `Paint specific lifestyle outcomes related to the opportunities in this report. Use concrete examples, not abstract "wealth."`,
+          urgencyClose: `Create urgency around timing, market conditions, or limited information access. Reference the report's key findings.`,
+        };
+
+        const systemPrompt = `You are writing a HIGH-CONVERTING financial advertorial (1200-1800 words) that follows a proven psychological structure. This is NOT a generic article. It must follow the EXACT structure below.
+
+TODAY'S DATE: ${today}
+
+SOURCE MATERIAL (use facts/numbers from this, but follow the STRUCTURE below):
+Title: ${report.title}
+Date: ${report.date}
+Summary: ${report.executiveSummary}
+
+SECTIONS:
+${sectionSummaries}
+
+=== REQUIRED ADVERTORIAL STRUCTURE ===
+
+Your article MUST include these 12 sections IN THIS ORDER. Each section builds psychological momentum toward the CTA.
+
+**SECTION 1: FOMO + REDEMPTION HOOK (2-3 short paragraphs)**
+${framing.hook}
+Immediately follow with hope/redemption: "But there's good news..." or "You're getting another chance..."
+Goal: Acknowledge pain, then offer hope. Hook them emotionally in first 3 sentences.
+
+**SECTION 2: CONTRARIAN REFRAME (1-2 paragraphs)**
+Reframe the reader's timing. They think they're late. Show them they're early.
+Example: "Here's what most investors are totally missing: [trend] is actually just getting started."
+Goal: Remove the "I missed it" objection.
+
+**SECTION 3: HISTORICAL ANALOGY (2-3 paragraphs)**
+Compare the current moment to a past transformative period where early skeptics won big.
+Example: "It feels late, just like the internet did around 2000. Back then, people thought they'd missed Yahoo and AOL. Then came Amazon, Google, Netflix."
+Goal: Make the pattern feel familiar and repeatable.
+
+**SECTION 4: FRAMEWORK/MENTAL MODEL (1-2 paragraphs)**
+Give readers a simple framework to understand where we are.
+Example: "Phase 1 was building the technology. Phase 2 is the global rollout. We're just entering Phase 2."
+Goal: Create a "you are here" clarity that makes the opportunity feel tangible.
+
+**SECTION 5: AUTHORITY STACKING (2-3 paragraphs)**
+Include 2-3 quotes or references from credible third parties (CEOs, analysts, publications).
+Goal: External validation, not just our opinion.
+
+**SECTION 6: EMOTIONAL STAKES (1-2 paragraphs)**
+${framing.stakes}
+Paint specific lifestyle outcomes, not abstract "wealth."
+Example: "The kind of returns that let you retire 5 years sooner. Pay off the house. Set up the kids."
+Goal: Make it personal. Connect money to life.
+
+**SECTION 7: THE NON-OBVIOUS EDGE (2-3 paragraphs)**
+Explain why most investors will pick the wrong stocks even if they spot the trend.
+Goal: Position your research as finding the non-obvious winners.
+
+**SECTION 8: TRACK RECORD / CREDIBILITY (1-2 paragraphs)**
+Reference past performance or credibility markers.
+Goal: Prove this source has found winners before.
+
+**SECTION 9: THE PIVOT (1 paragraph)**
+Transition from past success to current opportunity.
+Goal: Bridge from credibility to the new opportunity.
+
+**SECTION 10: THE TEASE (3-4 paragraphs) - CRITICAL SECTION**
+Describe the opportunity in compelling detail WITHOUT naming it directly.
+- What it does (its role in the ecosystem)
+- Why it's critical (who depends on it)
+- Why it's defensible (moat: technology, patents, network effects)
+- Why it's still undervalued (the gap between reality and market perception)
+Goal: Create intense curiosity. Reader MUST click to learn the name.
+
+**SECTION 11: THE OFFER STACK (1-2 paragraphs)**
+List what they'll get (make it feel like a lot of value):
+- The name and ticker of the company we've been describing
+- Full research thesis on why we like it
+- [X] additional stock picks positioned for this trend
+- Complete research report on [topic]
+Goal: Perceived value. Multiple deliverables.
+
+**SECTION 12: URGENCY + CTA (1-2 paragraphs)**
+${framing.urgencyClose}
+End with clear call to action.
+
+=== INLINE LINKS (for affiliate mode) ===
+Include 5-7 inline links throughout the article at moments of peak curiosity.
+
+=== STYLE RULES ===
+- Write in first person plural ("we found", "our research")
+- Ultra-short paragraphs (1-3 sentences max). Lots of white space.
+- Specific numbers always beat vague claims
+- NO em-dashes or en-dashes
+- NO contrastive framing ("This isn't X. It's Y.")
+- ASCII only
+
+=== OUTPUT FORMAT ===
+- Valid HTML only: <p>, <h2>, <a>, <ul>, <li> tags
+- 1200-1800 words total
+
+Respond in JSON: {"headline": "...", "content": "<p>...</p>..."}`;
+
+        // Call Anthropic API with Claude Sonnet
+        const anthropicResponse = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "x-api-key": anthropicKey,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 8000,
+            messages: [
+              {
+                role: "user",
+                content: systemPrompt,
+              },
+            ],
+          }),
+        });
+
+        if (!anthropicResponse.ok) {
+          const errorText = await anthropicResponse.text();
+          console.error("Anthropic API error:", errorText);
+          return Response.json(
+            { error: "Failed to generate advertorial", code: "ANTHROPIC_ERROR" },
+            { status: 500, headers: corsHeaders }
+          );
+        }
+
+        const anthropicData = await anthropicResponse.json() as {
+          content?: Array<{ type: string; text?: string }>;
+        };
+
+        const responseText = anthropicData.content?.[0]?.text || "";
+
+        if (!responseText) {
+          return Response.json(
+            { error: "Empty response from AI", code: "EMPTY_RESPONSE" },
+            { status: 500, headers: corsHeaders }
+          );
+        }
+
+        // Parse the JSON response
+        let advertorial: { headline: string; content: string };
+        try {
+          advertorial = JSON.parse(responseText);
+        } catch {
+          console.error("Failed to parse advertorial JSON:", responseText);
+          return Response.json(
+            { error: "Invalid JSON response from AI", code: "PARSE_ERROR" },
+            { status: 500, headers: corsHeaders }
+          );
+        }
+
+        return Response.json(advertorial, { headers: corsHeaders });
+      }
+
+      // Generate advertorial copy operation - creates Meta ad copy for an advertorial
+      if (path === "/api/operations/generate-advertorial-copy" && request.method === "POST") {
+        const body = await request.json() as { advertorialContent?: string };
+
+        if (!body.advertorialContent) {
+          return Response.json(
+            { error: "Missing advertorialContent field", code: "MISSING_CONTENT" },
+            { status: 400, headers: corsHeaders }
+          );
+        }
+
+        const anthropicKey = await env.FWP_ANTHROPIC_API_KEY.get();
+        const today = new Date().toISOString().split("T")[0];
+
+        // Truncate content preview for the prompt
+        const contentPreview = body.advertorialContent.slice(0, 8000);
+
+        const systemPrompt = `You are creating Facebook/Meta ad copy for an advertorial article. Generate compelling ad copy for 4 psychological angles.
+
+TODAY'S DATE: ${today}
+
+ARTICLE CONTENT:
+${contentPreview}
+
+YOUR TASK:
+Generate Meta ad copy for 4 angles. Each angle needs:
+- Primary Text: ≤125 characters (the main ad text shown above the image)
+- Headline: ≤255 characters (shown below the image, above the CTA)
+
+ANGLES:
+1. FEAR - Loss aversion, missing out, risks, what they don't know
+2. GREED - Gains, benefits, what they'll get, opportunity
+3. CURIOSITY - Intrigue, secrets, what's inside, surprising info
+4. URGENCY - Time pressure, act now, limited window, don't wait
+
+CHARACTER LIMITS (STRICT - ads will be rejected if exceeded):
+- Primary Text: EXACTLY 125 characters or less
+- Headline: EXACTLY 255 characters or less
+
+STYLE GUIDELINES:
+- Conversational, scroll-stopping tone (this is Facebook, not Google)
+- Use sentence case (not Title Case)
+- Can use questions to create curiosity
+- No clickbait that doesn't deliver
+- No ALL CAPS words
+- No excessive punctuation (!!!)
+- ASCII characters only, no emojis
+- Professional but accessible
+
+Respond in JSON with fear, greed, curiosity, urgency objects. Each object should have "primaryText" and "headline" fields.
+
+Example format:
+{
+  "fear": {"primaryText": "...", "headline": "..."},
+  "greed": {"primaryText": "...", "headline": "..."},
+  "curiosity": {"primaryText": "...", "headline": "..."},
+  "urgency": {"primaryText": "...", "headline": "..."}
+}`;
+
+        // Call Anthropic API with Claude Sonnet
+        const anthropicResponse = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "x-api-key": anthropicKey,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "claude-sonnet-4-20250514",
+            max_tokens: 2000,
+            messages: [
+              {
+                role: "user",
+                content: systemPrompt,
+              },
+            ],
+          }),
+        });
+
+        if (!anthropicResponse.ok) {
+          const errorText = await anthropicResponse.text();
+          console.error("Anthropic API error:", errorText);
+          return Response.json(
+            { error: "Failed to generate advertorial copy", code: "ANTHROPIC_ERROR" },
+            { status: 500, headers: corsHeaders }
+          );
+        }
+
+        const anthropicData = await anthropicResponse.json() as {
+          content?: Array<{ type: string; text?: string }>;
+        };
+
+        const responseText = anthropicData.content?.[0]?.text || "";
+
+        if (!responseText) {
+          return Response.json(
+            { error: "Empty response from AI", code: "EMPTY_RESPONSE" },
+            { status: 500, headers: corsHeaders }
+          );
+        }
+
+        // Parse the JSON response
+        let adCopy: AdCopyResponse;
+        try {
+          adCopy = JSON.parse(responseText);
+        } catch {
+          console.error("Failed to parse ad copy JSON:", responseText);
+          return Response.json(
+            { error: "Invalid JSON response from AI", code: "PARSE_ERROR" },
+            { status: 500, headers: corsHeaders }
+          );
+        }
+
+        return Response.json(adCopy, { headers: corsHeaders });
+      }
+
+      // Generate visual concepts operation - uses Claude Haiku
+      if (path === "/api/operations/generate-visual-concepts" && request.method === "POST") {
+        const body = await request.json() as {
+          report?: ReportObject;
+          count?: number;
+          mode?: "report" | "newsletter" | "advertorial";
+          advertorialContent?: string;
+        };
+
+        if (!body.report && body.mode !== "advertorial") {
+          return Response.json(
+            { error: "Missing report field", code: "MISSING_REPORT" },
+            { status: 400, headers: corsHeaders }
+          );
+        }
+
+        if (body.mode === "advertorial" && !body.advertorialContent) {
+          return Response.json(
+            { error: "Missing advertorialContent for advertorial mode", code: "MISSING_CONTENT" },
+            { status: 400, headers: corsHeaders }
+          );
+        }
+
+        const anthropicKey = await env.FWP_ANTHROPIC_API_KEY.get();
+        const count = body.count || 6;
+        const mode = body.mode || "report";
+
+        // Build prompt based on mode
+        let prompt = "";
+
+        if (mode === "report" || mode === "newsletter") {
+          const report = body.report!;
+          const stocksContext = report.sections?.flatMap(s => s.stockPicks || []).join(", ") || "Various stocks";
+          const numbersContext = report.sections?.flatMap(s => s.keyNumbers || []).join(", ") || "Various data points";
+          const titlesAndHooks = report.sections?.map(s => `- ${s.title}: ${s.hook}`).join("\n") || "";
+
+          prompt = `Generate ${count} DIVERSE visual concepts for direct response ad images. These ads promote a free financial report.
+
+REPORT: "${report.title || "Investment Report"}"
+SUMMARY: ${report.executiveSummary || "Financial analysis and stock recommendations"}
+STOCKS/TOPICS: ${stocksContext}
+KEY NUMBERS: ${numbersContext}
+
+SECTION HOOKS (what we're selling):
+${titlesAndHooks}
+
+YOUR MISSION: Create ${count} highly varied, scroll-stopping visual concepts. Mix these categories:
+
+CATEGORY 1: ASPIRATIONAL PEOPLE (use 35% of concepts)
+Real people who represent the TARGET AUDIENCE or DESIRED OUTCOME:
+- Wealthy 55-65 year old man in expensive casual wear (cashmere, luxury watch), confident knowing expression
+- Attractive professional woman (28-35) discovering something exciting on her phone/laptop
+- Successful retired couple (60s) enjoying lifestyle that smart investing enabled
+- Sharp executive (40-50s) with "I know something you don't" confident smirk
+- Young professional woman leaning forward with genuine curiosity, direct eye contact
+- Distinguished older gentleman with reading glasses, trustworthy advisor appearance
+- Attractive woman (30s) with subtle, tasteful sophistication, professional but appealing
+
+CATEGORY 2: TECH & INNOVATION (use 40% of concepts - IMPORTANT: make these look REAL)
+Photorealistic technology imagery relevant to the report topics:
+- Server rooms and data centers: person walking through rows of servers, dramatic scale
+- GPU and chip close-ups: macro photography of actual NVIDIA chips, circuit boards, processors
+- Network infrastructure: fiber optic cables with light, networking equipment
+- Trading/analysis setups: multi-monitor workstations, professional trading desks
+- AI infrastructure: cooling systems, power distribution, rack-mounted servers
+- Person + tech interaction: engineer inspecting server, analyst pointing at multiple screens
+- Premium devices: flagship laptop on executive desk, tablet showing abstract data viz
+- Semiconductor manufacturing: clean room imagery, wafer inspection
+- Optical technology: fiber optics, laser equipment, photonics hardware
+- Data visualization: person reviewing holographic-style data, futuristic but grounded
+
+CATEGORY 3: LIFESTYLE & ASPIRATION (use 25% of concepts)
+The OUTCOME of smart investing:
+- Morning routine with coffee and phone, beautiful home, calm successful energy
+- First class travel, yacht club, golf course - person casually checking markets
+- Home office with city view, person relaxed but engaged
+- Beach house or vacation setting with laptop - financial freedom lifestyle
+
+CRITICAL REQUIREMENTS:
+1. Each concept is ONE clear focal point (person OR tech OR lifestyle scene)
+2. NO text, charts, graphs, numbers, or UI elements in the image
+3. VARY the demographics: mix ages (28-65), genders, and settings
+4. VARY color palettes: warm golden tones, cool modern blues, bright aspirational whites, moody dramatic lighting
+5. Make people RELATABLE yet ASPIRATIONAL - successful but approachable
+6. For attractive women: tasteful, professional, confident - think successful entrepreneur not model
+7. All human images must feel like REAL PHOTOGRAPHS not AI art
+
+EMOTIONS TO TARGET (vary these):
+- "I need to know what they know" (curiosity/FOMO)
+- "This person figured it out" (aspiration/trust)
+- "Something big is happening" (urgency/excitement)
+- "I could have this lifestyle" (desire/motivation)
+- "This looks credible and valuable" (trust/authority)
+
+Respond in JSON:
+{
+  "concepts": [
+    {
+      "concept": "Highly detailed visual description with specific age, clothing, expression, setting, lighting",
+      "targetEmotion": "The specific emotional response this should trigger",
+      "colorScheme": "Specific color palette (NOT always blue - vary widely)"
+    }
+  ]
+}`;
+        } else {
+          // Advertorial mode
+          prompt = `Generate ${count} DIVERSE visual concepts for direct response ad images. These ads promote a financial advertorial article.
+
+ARTICLE CONTENT:
+${body.advertorialContent?.slice(0, 8000)}
+
+YOUR MISSION: Create ${count} highly varied, scroll-stopping visual concepts based on the article content. Mix these categories:
+
+CATEGORY 1: ASPIRATIONAL PEOPLE (use 35% of concepts)
+Real people who represent the TARGET AUDIENCE or DESIRED OUTCOME:
+- Wealthy 55-65 year old man in expensive casual wear (cashmere, luxury watch), confident knowing expression
+- Attractive professional woman (28-35) discovering something exciting on her phone/laptop
+- Successful retired couple (60s) enjoying lifestyle that smart investing enabled
+- Sharp executive (40-50s) with "I know something you don't" confident smirk
+- Young professional woman leaning forward with genuine curiosity, direct eye contact
+
+CATEGORY 2: TECH & INNOVATION (use 40% of concepts - make these look REAL)
+Photorealistic technology imagery relevant to the article topics:
+- Server rooms, data centers, chip close-ups, network infrastructure
+- Trading setups, professional workstations
+- Person + tech interaction scenes
+
+CATEGORY 3: LIFESTYLE & ASPIRATION (use 25% of concepts)
+The OUTCOME of smart investing:
+- Morning routines in beautiful homes, first class travel, home offices with views
+
+CRITICAL REQUIREMENTS:
+1. Each concept is ONE clear focal point
+2. NO text, charts, graphs, numbers, or UI elements in the image
+3. VARY demographics and color palettes
+4. All human images must feel like REAL PHOTOGRAPHS not AI art
+
+Respond in JSON:
+{
+  "concepts": [
+    {
+      "concept": "Highly detailed visual description",
+      "targetEmotion": "The specific emotional response",
+      "colorScheme": "Specific color palette"
+    }
+  ]
+}`;
+        }
+
+        const anthropicResponse = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "x-api-key": anthropicKey,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "claude-3-haiku-20240307",
+            max_tokens: 4000,
+            messages: [{ role: "user", content: prompt }],
+          }),
+        });
+
+        if (!anthropicResponse.ok) {
+          const errorText = await anthropicResponse.text();
+          console.error("Anthropic API error:", errorText);
+          return Response.json(
+            { error: "Failed to generate visual concepts", code: "ANTHROPIC_ERROR" },
+            { status: 500, headers: corsHeaders }
+          );
+        }
+
+        const anthropicData = await anthropicResponse.json() as {
+          content?: Array<{ type: string; text?: string }>;
+        };
+
+        const responseText = anthropicData.content?.[0]?.text || "";
+
+        // Parse JSON from response (handle markdown code blocks)
+        let jsonStr = responseText;
+        const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
+        if (jsonMatch) {
+          jsonStr = jsonMatch[1].trim();
+        }
+
+        try {
+          const parsed = JSON.parse(jsonStr) as { concepts: Array<{ concept: string; targetEmotion: string; colorScheme: string }> };
+          return Response.json({ concepts: parsed.concepts }, { headers: corsHeaders });
+        } catch {
+          console.error("Failed to parse concepts JSON:", responseText);
+          return Response.json(
+            { error: "Failed to parse response", code: "PARSE_ERROR" },
+            { status: 500, headers: corsHeaders }
+          );
+        }
+      }
+
+      // Summarize operation - uses Gemini Flash (cheap, fast)
+      if (path === "/api/operations/summarize" && request.method === "POST") {
+        const body = await request.json() as { text?: string; maxLength?: number };
+
+        if (!body.text) {
+          return Response.json(
+            { error: "Missing text field", code: "MISSING_TEXT" },
+            { status: 400, headers: corsHeaders }
+          );
+        }
+
+        const geminiKey = await env.FWP_GEMINI_API_KEY.get();
+        const maxLength = body.maxLength || 200;
+
+        const prompt = `Summarize the following text in ${maxLength} words or less. Be concise and capture the key points. Output only the summary, no explanations.
+
+TEXT:
+${body.text.slice(0, 50000)}`;
+
+        const geminiResponse = await fetch(
+          "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+          {
+            method: "POST",
+            headers: {
+              "x-goog-api-key": geminiKey,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }] }],
+            }),
+          }
+        );
+
+        if (!geminiResponse.ok) {
+          const errorText = await geminiResponse.text();
+          console.error("Gemini API error:", errorText);
+          return Response.json(
+            { error: "Failed to summarize text", code: "GEMINI_ERROR" },
+            { status: 500, headers: corsHeaders }
+          );
+        }
+
+        const geminiData = await geminiResponse.json() as {
+          candidates?: Array<{
+            content?: { parts?: Array<{ text?: string }> };
+          }>;
+        };
+
+        const summary = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "";
+
+        return Response.json({ summary }, { headers: corsHeaders });
+      }
+
+      // Extract key points operation - uses Gemini Flash
+      if (path === "/api/operations/extract-key-points" && request.method === "POST") {
+        const body = await request.json() as { text?: string; maxPoints?: number };
+
+        if (!body.text) {
+          return Response.json(
+            { error: "Missing text field", code: "MISSING_TEXT" },
+            { status: 400, headers: corsHeaders }
+          );
+        }
+
+        const geminiKey = await env.FWP_GEMINI_API_KEY.get();
+        const maxPoints = body.maxPoints || 5;
+
+        const prompt = `Extract the ${maxPoints} most important key points from the following text. Return them as a JSON array of strings.
+
+TEXT:
+${body.text.slice(0, 50000)}
+
+Respond in this exact JSON format:
+{ "points": ["Point 1", "Point 2", "Point 3"] }`;
+
+        const geminiResponse = await fetch(
+          "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+          {
+            method: "POST",
+            headers: {
+              "x-goog-api-key": geminiKey,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }] }],
+            }),
+          }
+        );
+
+        if (!geminiResponse.ok) {
+          const errorText = await geminiResponse.text();
+          console.error("Gemini API error:", errorText);
+          return Response.json(
+            { error: "Failed to extract key points", code: "GEMINI_ERROR" },
+            { status: 500, headers: corsHeaders }
+          );
+        }
+
+        const geminiData = await geminiResponse.json() as {
+          candidates?: Array<{
+            content?: { parts?: Array<{ text?: string }> };
+          }>;
+        };
+
+        const responseText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "";
+
+        // Parse JSON from response
+        let jsonStr = responseText;
+        const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
+        if (jsonMatch) {
+          jsonStr = jsonMatch[1].trim();
+        }
+
+        try {
+          const parsed = JSON.parse(jsonStr) as { points: string[] };
+          return Response.json({ points: parsed.points }, { headers: corsHeaders });
+        } catch {
+          // Fallback: try to extract points from plain text
+          const lines = responseText.split("\n").filter(l => l.trim().length > 0);
+          return Response.json({ points: lines.slice(0, maxPoints) }, { headers: corsHeaders });
+        }
+      }
+
+      // Fetch podcast audio operation - extracts audio URL from podcast pages
+      if (path === "/api/operations/fetch-podcast-audio" && request.method === "POST") {
+        const body = await request.json() as { episodeUrl?: string };
+
+        if (!body.episodeUrl) {
+          return Response.json(
+            { error: "Missing episodeUrl field", code: "MISSING_URL" },
+            { status: 400, headers: corsHeaders }
+          );
+        }
+
+        // Fetch the page
+        let pageHtml = "";
+        let fetchError = "";
+
+        try {
+          const pageResponse = await fetch(body.episodeUrl, {
+            headers: {
+              "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+              "Accept-Language": "en-US,en;q=0.5",
+            },
+          });
+
+          if (!pageResponse.ok) {
+            fetchError = `HTTP ${pageResponse.status}: ${pageResponse.statusText}`;
+          } else {
+            pageHtml = await pageResponse.text();
+          }
+        } catch (err) {
+          fetchError = err instanceof Error ? err.message : "Fetch failed";
+        }
+
+        if (fetchError || !pageHtml) {
+          return Response.json(
+            { error: `Failed to fetch page: ${fetchError}`, code: "FETCH_ERROR" },
+            { status: 500, headers: corsHeaders }
+          );
+        }
+
+        // Extract audio URL from common patterns
+        let audioUrl = "";
+        let title = "";
+
+        // Try og:audio meta tag
+        const ogAudioMatch = pageHtml.match(/<meta\s+property="og:audio"\s+content="([^"]+)"/i);
+        if (ogAudioMatch) {
+          audioUrl = ogAudioMatch[1];
+        }
+
+        // Try twitter:player:stream meta tag
+        if (!audioUrl) {
+          const twitterMatch = pageHtml.match(/<meta\s+name="twitter:player:stream"\s+content="([^"]+)"/i);
+          if (twitterMatch) {
+            audioUrl = twitterMatch[1];
+          }
+        }
+
+        // Try audio tag src
+        if (!audioUrl) {
+          const audioSrcMatch = pageHtml.match(/<audio[^>]*src="([^"]+\.mp3[^"]*)"/i);
+          if (audioSrcMatch) {
+            audioUrl = audioSrcMatch[1];
+          }
+        }
+
+        // Try source tag inside audio
+        if (!audioUrl) {
+          const sourceMatch = pageHtml.match(/<source[^>]*src="([^"]+\.mp3[^"]*)"/i);
+          if (sourceMatch) {
+            audioUrl = sourceMatch[1];
+          }
+        }
+
+        // Try data-src pattern (common in podcast players)
+        if (!audioUrl) {
+          const dataSrcMatch = pageHtml.match(/data-(?:audio-)?src="([^"]+\.mp3[^"]*)"/i);
+          if (dataSrcMatch) {
+            audioUrl = dataSrcMatch[1];
+          }
+        }
+
+        // Try enclosure or direct mp3 link
+        if (!audioUrl) {
+          const mp3Match = pageHtml.match(/"(https?:\/\/[^"]+\.mp3[^"]*)"/i);
+          if (mp3Match) {
+            audioUrl = mp3Match[1];
+          }
+        }
+
+        // Extract title from og:title or title tag
+        const ogTitleMatch = pageHtml.match(/<meta\s+property="og:title"\s+content="([^"]+)"/i);
+        if (ogTitleMatch) {
+          title = ogTitleMatch[1];
+        } else {
+          const titleMatch = pageHtml.match(/<title>([^<]+)<\/title>/i);
+          if (titleMatch) {
+            title = titleMatch[1];
+          }
+        }
+
+        if (!audioUrl) {
+          return Response.json(
+            { error: "Could not find audio URL on page", code: "NO_AUDIO" },
+            { status: 404, headers: corsHeaders }
+          );
+        }
+
+        // Clean up HTML entities in title
+        title = title
+          .replace(/&amp;/g, "&")
+          .replace(/&lt;/g, "<")
+          .replace(/&gt;/g, ">")
+          .replace(/&quot;/g, '"')
+          .replace(/&#39;/g, "'")
+          .trim();
+
+        return Response.json({ audioUrl, title }, { headers: corsHeaders });
+      }
+
+      // Parse RSS operation - parses podcast RSS feeds
+      if (path === "/api/operations/parse-rss" && request.method === "POST") {
+        const body = await request.json() as { rssUrl?: string };
+
+        if (!body.rssUrl) {
+          return Response.json(
+            { error: "Missing rssUrl field", code: "MISSING_URL" },
+            { status: 400, headers: corsHeaders }
+          );
+        }
+
+        // Fetch the RSS feed
+        let rssXml = "";
+        let fetchError = "";
+
+        try {
+          const rssResponse = await fetch(body.rssUrl, {
+            headers: {
+              "User-Agent": "Mozilla/5.0 (compatible; FlowOps/1.0)",
+              "Accept": "application/rss+xml, application/xml, text/xml, */*",
+            },
+          });
+
+          if (!rssResponse.ok) {
+            fetchError = `HTTP ${rssResponse.status}: ${rssResponse.statusText}`;
+          } else {
+            rssXml = await rssResponse.text();
+          }
+        } catch (err) {
+          fetchError = err instanceof Error ? err.message : "Fetch failed";
+        }
+
+        if (fetchError || !rssXml) {
+          return Response.json(
+            { error: `Failed to fetch RSS: ${fetchError}`, code: "FETCH_ERROR" },
+            { status: 500, headers: corsHeaders }
+          );
+        }
+
+        // Parse RSS items using regex (Workers don't have DOMParser)
+        const episodes: Array<{ title: string; audioUrl: string; pubDate: string; description: string }> = [];
+
+        // Match all <item> blocks
+        const itemMatches = rssXml.matchAll(/<item[^>]*>([\s\S]*?)<\/item>/gi);
+
+        for (const itemMatch of itemMatches) {
+          const itemContent = itemMatch[1];
+
+          // Extract title
+          const titleMatch = itemContent.match(/<title>(?:<!\[CDATA\[)?([^\]<]+)(?:\]\]>)?<\/title>/i);
+          const title = titleMatch ? titleMatch[1].trim() : "";
+
+          // Extract audio URL from enclosure
+          const enclosureMatch = itemContent.match(/<enclosure[^>]+url="([^"]+)"/i);
+          const audioUrl = enclosureMatch ? enclosureMatch[1] : "";
+
+          // Extract pubDate
+          const pubDateMatch = itemContent.match(/<pubDate>([^<]+)<\/pubDate>/i);
+          const pubDate = pubDateMatch ? pubDateMatch[1].trim() : "";
+
+          // Extract description (prefer itunes:summary, fallback to description)
+          let description = "";
+          const itunesSummaryMatch = itemContent.match(/<itunes:summary>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/itunes:summary>/i);
+          if (itunesSummaryMatch) {
+            description = itunesSummaryMatch[1].trim();
+          } else {
+            const descMatch = itemContent.match(/<description>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/description>/i);
+            if (descMatch) {
+              description = descMatch[1].trim();
+            }
+          }
+
+          // Strip HTML from description
+          description = description.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+
+          if (title && audioUrl) {
+            episodes.push({ title, audioUrl, pubDate, description });
+          }
+        }
+
+        return Response.json({ episodes }, { headers: corsHeaders });
+      }
+
+      // Stock lookup operation - returns mock data (real API would need finance API key)
+      if (path === "/api/operations/stock-lookup" && request.method === "POST") {
+        const body = await request.json() as { ticker?: string };
+
+        if (!body.ticker) {
+          return Response.json(
+            { error: "Missing ticker field", code: "MISSING_TICKER" },
+            { status: 400, headers: corsHeaders }
+          );
+        }
+
+        const ticker = body.ticker.toUpperCase();
+
+        // Mock data for common tickers (in production, call a finance API)
+        const mockStocks: Record<string, { name: string; price: number; change: number; marketCap: string }> = {
+          "AAPL": { name: "Apple Inc.", price: 178.52, change: 1.23, marketCap: "2.8T" },
+          "MSFT": { name: "Microsoft Corporation", price: 378.91, change: 2.45, marketCap: "2.8T" },
+          "GOOGL": { name: "Alphabet Inc.", price: 141.80, change: -0.87, marketCap: "1.7T" },
+          "AMZN": { name: "Amazon.com, Inc.", price: 178.25, change: 3.12, marketCap: "1.8T" },
+          "NVDA": { name: "NVIDIA Corporation", price: 875.28, change: 15.67, marketCap: "2.2T" },
+          "META": { name: "Meta Platforms, Inc.", price: 485.22, change: 5.43, marketCap: "1.2T" },
+          "TSLA": { name: "Tesla, Inc.", price: 245.67, change: -4.32, marketCap: "780B" },
+          "BRK.B": { name: "Berkshire Hathaway Inc.", price: 412.35, change: 1.87, marketCap: "905B" },
+          "JPM": { name: "JPMorgan Chase & Co.", price: 198.45, change: 2.11, marketCap: "575B" },
+          "V": { name: "Visa Inc.", price: 278.90, change: 1.56, marketCap: "575B" },
+        };
+
+        const stockData = mockStocks[ticker];
+
+        if (stockData) {
+          return Response.json({
+            ticker,
+            name: stockData.name,
+            price: stockData.price,
+            change: stockData.change,
+            marketCap: stockData.marketCap,
+          }, { headers: corsHeaders });
+        }
+
+        // For unknown tickers, return placeholder data
+        return Response.json({
+          ticker,
+          name: `${ticker} Corp.`,
+          price: 100.00,
+          change: 0.00,
+          marketCap: "N/A",
+        }, { headers: corsHeaders });
       }
 
       // 404 for unknown routes

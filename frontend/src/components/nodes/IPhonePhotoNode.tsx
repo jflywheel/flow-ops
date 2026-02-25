@@ -1,6 +1,13 @@
 import { Handle, Position } from "@xyflow/react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { generatePhoto } from "../../api";
+
+// Visual concept structure from GenerateVisualConceptsNode
+interface VisualConcept {
+  concept: string;
+  targetEmotion: string;
+  colorScheme: string;
+}
 
 interface IPhonePhotoNodeProps {
   id: string;
@@ -9,6 +16,8 @@ interface IPhonePhotoNodeProps {
     imageUrl: string;
     prompt: string;
     loading: boolean;
+    // Visual concept can be passed directly or parsed from inputValue JSON
+    visualConcept?: VisualConcept;
     updateNodeData?: (nodeId: string, data: Record<string, unknown>) => void;
     propagateOutput?: (sourceId: string, imageUrl: string, prompt: string) => void;
   };
@@ -24,13 +33,99 @@ export default function IPhonePhotoNode({ id, data }: IPhonePhotoNodeProps) {
   const [extraInstructions, setExtraInstructions] = useState("");
   const [format, setFormat] = useState<"square" | "landscape" | "portrait" | "vertical">("square");
   const [model, setModel] = useState<"gemini-flash" | "gemini-pro">("gemini-flash");
+  const [useRealismPrompt, setUseRealismPrompt] = useState(false);
 
   const inputValue = data.inputValue || "";
   const inputImageUrl = data.imageUrl || "";
 
+  // Try to parse visual concept from input
+  const getVisualConcept = (): VisualConcept | null => {
+    if (data.visualConcept) return data.visualConcept;
+    if (!inputValue) return null;
+
+    try {
+      const parsed = JSON.parse(inputValue);
+      // Check if it's a single concept
+      if (parsed.concept && parsed.targetEmotion && parsed.colorScheme) {
+        return parsed as VisualConcept;
+      }
+      // Check if it's a concepts array (pick first one)
+      if (parsed.concepts && Array.isArray(parsed.concepts) && parsed.concepts.length > 0) {
+        return parsed.concepts[0] as VisualConcept;
+      }
+    } catch {
+      // Not JSON, not a visual concept
+    }
+    return null;
+  };
+
+  const visualConcept = getVisualConcept();
+
+  // Auto-enable realism prompt when visual concept is detected
+  useEffect(() => {
+    if (visualConcept) {
+      setUseRealismPrompt(true);
+    }
+  }, [visualConcept]);
+
+  // FWP realism guidelines for human subjects (from section 5d of FWP-PROMPT-REFERENCE.md)
+  const buildRealismPrompt = (concept: VisualConcept): string => {
+    return `Create a photorealistic image for a digital advertisement. This must look like a real photograph.
+
+SUBJECT: ${concept.concept}
+
+EMOTIONAL TARGET: ${concept.targetEmotion}
+
+COLOR/LIGHTING: ${concept.colorScheme}
+
+PHOTOREALISM REQUIREMENTS FOR HUMAN SUBJECTS:
+This must look like a real photograph, not AI-generated art.
+
+Photography style:
+- Shot on Canon 5D or Sony A7, 50-85mm lens, f/2.8 aperture
+- Natural available light or soft window light
+- Shallow depth of field with natural background bokeh
+- Slight film grain, natural color grading
+
+Human appearance (avoid "AI sheen"):
+- Natural skin texture: visible pores, subtle imperfections
+- Age-appropriate details: wrinkles, laugh lines for older subjects
+- Real hair: individual strands visible, slight flyaways
+- Authentic eyes: natural moisture/depth, realistic catchlights
+- Natural expressions: candid, genuine, not performative
+
+What to AVOID:
+- Poreless, waxy, or plastic-looking skin
+- Perfectly uniform lighting
+- Hair that looks painted or unnaturally smooth
+- Glassy, lifeless eyes
+- Overly symmetrical facial features
+- Theatrical or stock-photo-style expressions
+
+PHOTOGRAPHY DIRECTION:
+- This is a REAL PHOTOGRAPH, not digital art or illustration
+- Shot on professional camera (Canon 5D, Sony A7) with 50-85mm lens
+- Natural or professional studio lighting appropriate to the scene
+- Shallow depth of field where appropriate (f/2.8 for portraits, deeper for scenes)
+- The subject should be positioned to leave space for text overlay (rule of thirds)
+
+COMPOSITION RULES:
+1. ONE clear focal point - the viewer's eye should go directly to it
+2. Clean, uncluttered background (bokeh, solid, or simple environment)
+3. Subject in the center 70% of frame (edges may be cropped by platforms)
+4. Professional, aspirational, trustworthy feel
+
+ABSOLUTELY FORBIDDEN:
+- Any text, words, numbers, labels, or UI elements
+- Charts, graphs, arrows, data visualizations
+- Multiple competing focal points
+- Logos, watermarks, or brand elements
+- Anything that looks AI-generated (plastic skin, weird hands, uncanny valley)`;
+  };
+
   const handleGenerate = async () => {
-    if (!inputValue.trim() && !inputImageUrl) {
-      setError("Connect a text or image input first");
+    if (!inputValue.trim() && !inputImageUrl && !visualConcept) {
+      setError("Connect a text, image, or visual concept input first");
       return;
     }
 
@@ -39,7 +134,18 @@ export default function IPhonePhotoNode({ id, data }: IPhonePhotoNodeProps) {
     setDone(false);
 
     try {
-      const result = await generatePhoto(inputValue, extraInstructions || undefined, inputImageUrl || undefined, format, model);
+      // Determine what prompt to use
+      let promptText = inputValue;
+
+      // If we have a visual concept and realism is enabled, use the detailed FWP prompt
+      if (visualConcept && useRealismPrompt) {
+        promptText = buildRealismPrompt(visualConcept);
+      } else if (visualConcept) {
+        // Simple concept prompt without full realism guidelines
+        promptText = `${visualConcept.concept}. Emotion: ${visualConcept.targetEmotion}. Colors: ${visualConcept.colorScheme}`;
+      }
+
+      const result = await generatePhoto(promptText, extraInstructions || undefined, inputImageUrl || undefined, format, model);
       setImageUrl(result.imageUrl);
       setDone(true);
       data.updateNodeData?.(id, { imageUrl: result.imageUrl, prompt: result.prompt });
@@ -134,7 +240,28 @@ export default function IPhonePhotoNode({ id, data }: IPhonePhotoNodeProps) {
         </div>
       )}
 
-      {inputValue && (
+      {/* Visual concept preview (takes priority over raw text) */}
+      {visualConcept && (
+        <div
+          style={{
+            background: "#f0fdfa",
+            padding: "8px 10px",
+            borderRadius: "8px",
+            fontSize: "11px",
+            color: "#0d9488",
+            marginBottom: "10px",
+            lineHeight: "1.4",
+          }}
+        >
+          <div style={{ fontWeight: 500, marginBottom: "2px" }}>Visual Concept</div>
+          <div style={{ fontSize: "10px", color: "#14b8a6" }}>
+            {visualConcept.targetEmotion} | {visualConcept.colorScheme.slice(0, 30)}...
+          </div>
+        </div>
+      )}
+
+      {/* Plain text input preview (only if no visual concept) */}
+      {inputValue && !visualConcept && (
         <div
           style={{
             background: "#f5f5f7",
@@ -214,6 +341,32 @@ export default function IPhonePhotoNode({ id, data }: IPhonePhotoNodeProps) {
               <option value="vertical">Vertical (9:16) - Stories/Reels</option>
             </select>
           </div>
+          {/* FWP Realism toggle (auto-enabled when visual concept detected) */}
+          {visualConcept && (
+            <div style={{ marginBottom: "8px" }}>
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  fontSize: "11px",
+                  color: "#1d1d1f",
+                  cursor: "pointer",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={useRealismPrompt}
+                  onChange={(e) => setUseRealismPrompt(e.target.checked)}
+                  style={{ accentColor: "#667eea" }}
+                />
+                FWP Realism Prompt
+              </label>
+              <div style={{ fontSize: "9px", color: "#86868b", marginTop: "2px" }}>
+                Uses detailed photorealism guidelines
+              </div>
+            </div>
+          )}
           <textarea
             value={extraInstructions}
             onChange={(e) => setExtraInstructions(e.target.value)}

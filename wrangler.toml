@@ -16,3 +16,8 @@ secret_name = "FWP_OPENAI_API_KEY"
 binding = "FWP_ANTHROPIC_API_KEY"
 store_id = "8602c0b6a1d94696971a2aedf8afdfd9"
 secret_name = "FWP_ANTHROPIC_API_KEY"
+
+[[secrets_store_secrets]]
+binding = "ASSEMBLYAI_API_KEY"
+store_id = "8602c0b6a1d94696971a2aedf8afdfd9"
+secret_name = "ASSEMBLYAI_API_KEY"

@@ -9,6 +9,7 @@ interface Env {
   FWP_GEMINI_API_KEY: SecretStoreSecret;
   FWP_OPENAI_API_KEY: SecretStoreSecret;
   FWP_ANTHROPIC_API_KEY: SecretStoreSecret;
+  ASSEMBLYAI_API_KEY: SecretStoreSecret;
 }
 
 // Types for landing page and advertorial endpoints
@@ -820,112 +821,86 @@ ${truncatedText}`;
         return Response.json({ result }, { headers: corsHeaders });
       }
 
-      // Transcribe operation - transcribes audio using Gemini 2.5 Flash
+      // Transcribe operation - transcribes audio using AssemblyAI
       if (path === "/api/operations/transcribe" && request.method === "POST") {
-        const body = await request.json() as { audioUrl?: string; audioBase64?: string; mimeType?: string };
+        const body = await request.json() as { audioUrl?: string };
 
-        // Validate input: need either audioUrl or audioBase64
-        if (!body.audioUrl && !body.audioBase64) {
+        if (!body.audioUrl) {
           return Response.json(
-            { error: "Missing audioUrl or audioBase64 field", code: "MISSING_AUDIO" },
+            { error: "Missing audioUrl field", code: "MISSING_AUDIO" },
             { status: 400, headers: corsHeaders }
           );
         }
 
-        const geminiKey = await env.FWP_GEMINI_API_KEY.get();
+        const assemblyKey = await env.ASSEMBLYAI_API_KEY.get();
 
-        let audioBase64 = "";
-        let mimeType = body.mimeType || "audio/mpeg";
+        // Step 1: Submit transcription request to AssemblyAI
+        console.log("Submitting to AssemblyAI:", body.audioUrl);
+        const submitResponse = await fetch("https://api.assemblyai.com/v2/transcript", {
+          method: "POST",
+          headers: {
+            "Authorization": assemblyKey,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            audio_url: body.audioUrl,
+            speech_model: "best",
+          }),
+        });
 
-        if (body.audioBase64) {
-          // Use provided base64 directly
-          audioBase64 = body.audioBase64;
-        } else if (body.audioUrl) {
-          // Fetch audio from URL
-          console.log("Fetching audio from URL:", body.audioUrl);
-          try {
-            const audioResponse = await fetch(body.audioUrl);
-            if (!audioResponse.ok) {
-              return Response.json(
-                { error: `Failed to fetch audio: HTTP ${audioResponse.status}`, code: "AUDIO_FETCH_ERROR" },
-                { status: 500, headers: corsHeaders }
-              );
-            }
-
-            // Detect mime type from Content-Type header or URL
-            const contentType = audioResponse.headers.get("Content-Type");
-            if (contentType) {
-              mimeType = contentType.split(";")[0].trim();
-            } else if (body.audioUrl.endsWith(".mp3")) {
-              mimeType = "audio/mpeg";
-            } else if (body.audioUrl.endsWith(".wav")) {
-              mimeType = "audio/wav";
-            } else if (body.audioUrl.endsWith(".m4a")) {
-              mimeType = "audio/mp4";
-            }
-
-            // Convert to base64
-            const audioBuffer = await audioResponse.arrayBuffer();
-            audioBase64 = btoa(
-              new Uint8Array(audioBuffer).reduce((data, byte) => data + String.fromCharCode(byte), "")
-            );
-            console.log("Audio fetched, size:", audioBuffer.byteLength, "bytes, mimeType:", mimeType);
-          } catch (err) {
-            const message = err instanceof Error ? err.message : "Fetch failed";
-            return Response.json(
-              { error: `Failed to fetch audio: ${message}`, code: "AUDIO_FETCH_ERROR" },
-              { status: 500, headers: corsHeaders }
-            );
-          }
-        }
-
-        // Call Gemini 2.5 Flash for transcription
-        const transcribePrompt = `Transcribe the following audio file accurately. Output only the transcript text, with no additional commentary, timestamps, or speaker labels. Preserve natural paragraph breaks where appropriate.`;
-
-        const geminiResponse = await fetch(
-          "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
-          {
-            method: "POST",
-            headers: {
-              "x-goog-api-key": geminiKey,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              contents: [{
-                parts: [
-                  { text: transcribePrompt },
-                  {
-                    inlineData: {
-                      mimeType: mimeType,
-                      data: audioBase64
-                    }
-                  }
-                ]
-              }],
-            }),
-          }
-        );
-
-        if (!geminiResponse.ok) {
-          const errorText = await geminiResponse.text();
-          console.error("Gemini API error:", errorText);
+        if (!submitResponse.ok) {
+          const errorText = await submitResponse.text();
+          console.error("AssemblyAI submit error:", errorText);
           return Response.json(
-            { error: "Failed to transcribe audio", code: "GEMINI_ERROR", details: errorText },
+            { error: "Failed to submit transcription", code: "ASSEMBLYAI_SUBMIT_ERROR", details: errorText },
             { status: 500, headers: corsHeaders }
           );
         }
 
-        const geminiData = await geminiResponse.json() as {
-          candidates?: Array<{
-            content?: { parts?: Array<{ text?: string }> };
-          }>;
-        };
+        const submitData = await submitResponse.json() as { id: string; status: string };
+        const transcriptId = submitData.id;
+        console.log("AssemblyAI transcript ID:", transcriptId);
 
-        const transcript = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "";
+        // Step 2: Poll for completion (max 10 minutes for long podcasts)
+        const maxAttempts = 120; // 120 * 5s = 10 minutes
+        let attempts = 0;
+        let transcript = "";
+
+        while (attempts < maxAttempts) {
+          await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds between polls
+
+          const pollResponse = await fetch(`https://api.assemblyai.com/v2/transcript/${transcriptId}`, {
+            headers: { "Authorization": assemblyKey },
+          });
+
+          if (!pollResponse.ok) {
+            const errorText = await pollResponse.text();
+            console.error("AssemblyAI poll error:", errorText);
+            return Response.json(
+              { error: "Failed to check transcription status", code: "ASSEMBLYAI_POLL_ERROR", details: errorText },
+              { status: 500, headers: corsHeaders }
+            );
+          }
+
+          const pollData = await pollResponse.json() as { status: string; text?: string; error?: string };
+          console.log("AssemblyAI status:", pollData.status, "attempt:", attempts + 1);
+
+          if (pollData.status === "completed") {
+            transcript = pollData.text || "";
+            break;
+          } else if (pollData.status === "error") {
+            return Response.json(
+              { error: `Transcription failed: ${pollData.error}`, code: "ASSEMBLYAI_ERROR" },
+              { status: 500, headers: corsHeaders }
+            );
+          }
+
+          attempts++;
+        }
 
         if (!transcript) {
           return Response.json(
-            { error: "No transcript returned", code: "NO_TRANSCRIPT" },
+            { error: "Transcription timed out", code: "TIMEOUT" },
             { status: 500, headers: corsHeaders }
           );
         }

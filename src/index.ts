@@ -2225,14 +2225,29 @@ Respond in this exact JSON format:
       }
 
       // Fetch podcast audio operation - extracts audio URL from podcast pages
-      if (path === "/api/operations/fetch-podcast-audio" && request.method === "POST") {
-        const body = await request.json() as { episodeUrl?: string };
+      if (path === "/api/operations/podcast-episode" && request.method === "POST") {
+        const body = await request.json() as { url?: string };
 
-        if (!body.episodeUrl) {
+        if (!body.url) {
           return Response.json(
-            { error: "Missing episodeUrl field", code: "MISSING_URL" },
+            { error: "Missing url field", code: "MISSING_URL" },
             { status: 400, headers: corsHeaders }
           );
+        }
+
+        const episodeUrl = body.url;
+
+        // If it's already a direct audio URL, return it directly
+        if (episodeUrl.match(/\.(mp3|m4a|wav|ogg|aac)(\?|$)/i)) {
+          // Try to extract title from URL
+          const urlParts = episodeUrl.split('/');
+          const filename = urlParts[urlParts.length - 1].split('?')[0];
+          const title = filename.replace(/\.(mp3|m4a|wav|ogg|aac)$/i, '').replace(/-/g, ' ');
+
+          return Response.json({
+            audioUrl: episodeUrl,
+            title: title || "Podcast Episode"
+          }, { headers: corsHeaders });
         }
 
         // Fetch the page
@@ -2240,7 +2255,7 @@ Respond in this exact JSON format:
         let fetchError = "";
 
         try {
-          const pageResponse = await fetch(body.episodeUrl, {
+          const pageResponse = await fetch(episodeUrl, {
             headers: {
               "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
               "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -2345,12 +2360,12 @@ Respond in this exact JSON format:
       }
 
       // Parse RSS operation - parses podcast RSS feeds
-      if (path === "/api/operations/parse-rss" && request.method === "POST") {
-        const body = await request.json() as { rssUrl?: string };
+      if (path === "/api/operations/podcast-rss" && request.method === "POST") {
+        const body = await request.json() as { feedUrl?: string };
 
-        if (!body.rssUrl) {
+        if (!body.feedUrl) {
           return Response.json(
-            { error: "Missing rssUrl field", code: "MISSING_URL" },
+            { error: "Missing feedUrl field", code: "MISSING_URL" },
             { status: 400, headers: corsHeaders }
           );
         }
@@ -2360,7 +2375,7 @@ Respond in this exact JSON format:
         let fetchError = "";
 
         try {
-          const rssResponse = await fetch(body.rssUrl, {
+          const rssResponse = await fetch(body.feedUrl, {
             headers: {
               "User-Agent": "Mozilla/5.0 (compatible; FlowOps/1.0)",
               "Accept": "application/rss+xml, application/xml, text/xml, */*",
@@ -2424,7 +2439,14 @@ Respond in this exact JSON format:
           }
         }
 
-        return Response.json({ episodes }, { headers: corsHeaders });
+        // Extract feed title
+        let feedTitle = "Podcast Feed";
+        const feedTitleMatch = rssXml.match(/<channel[^>]*>[\s\S]*?<title>(?:<!\[CDATA\[)?([^\]<]+)(?:\]\]>)?<\/title>/i);
+        if (feedTitleMatch) {
+          feedTitle = feedTitleMatch[1].trim();
+        }
+
+        return Response.json({ feedTitle, episodes }, { headers: corsHeaders });
       }
 
       // Stock lookup operation - returns mock data (real API would need finance API key)

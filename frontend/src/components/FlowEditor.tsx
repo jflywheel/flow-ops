@@ -366,13 +366,19 @@ export default function FlowEditor() {
   );
 
   const propagateData = useCallback(
-    (sourceId: string, value: string) => {
+    (sourceId: string, value: string | Record<string, unknown>) => {
       const outgoingEdges = edges.filter((e) => e.source === sourceId);
       if (outgoingEdges.length > 1) {
         console.log(`Multi-output: Propagating data from ${sourceId} to ${outgoingEdges.length} targets:`, outgoingEdges.map(e => e.target));
       }
       for (const edge of outgoingEdges) {
-        updateNodeData(edge.target, { inputValue: value });
+        // If value is an object, spread it onto the target node
+        // If it's a string, set it as inputValue
+        if (typeof value === "object" && value !== null) {
+          updateNodeData(edge.target, { ...value, inputValue: JSON.stringify(value) });
+        } else {
+          updateNodeData(edge.target, { inputValue: value });
+        }
       }
     },
     [edges, updateNodeData]

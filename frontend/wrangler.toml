@@ -1,0 +1,5 @@
+name = "flow-ops"
+compatibility_date = "2024-01-01"
+
+# Pages project
+pages_build_output_dir = "dist"

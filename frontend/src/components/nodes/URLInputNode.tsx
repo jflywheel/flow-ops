@@ -1,6 +1,7 @@
 import { Handle, Position } from "@xyflow/react";
 import { useState } from "react";
 import { fetchURL } from "../../api";
+import ContentModal from "../ContentModal";
 
 interface URLInputNodeProps {
   id: string;
@@ -19,6 +20,7 @@ export default function URLInputNode({ id, data }: URLInputNodeProps) {
   const [error, setError] = useState("");
   const [articleText, setArticleText] = useState(data.articleText || "");
   const [showOptions, setShowOptions] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
 
   const handleFetch = async () => {
     if (!url.trim()) {
@@ -187,6 +189,7 @@ export default function URLInputNode({ id, data }: URLInputNodeProps) {
 
       {articleText && !loading && (
         <div
+          onClick={() => setModalOpen(true)}
           style={{
             marginTop: "10px",
             padding: "8px 10px",
@@ -197,13 +200,24 @@ export default function URLInputNode({ id, data }: URLInputNodeProps) {
             maxHeight: "80px",
             overflow: "hidden",
             lineHeight: "1.4",
+            cursor: "pointer",
           }}
         >
           <div style={{ fontWeight: 500, marginBottom: "4px" }}>Extracted:</div>
           {articleText.slice(0, 150)}
           {articleText.length > 150 && "..."}
+          <div style={{ fontSize: "10px", color: "#22c55e", marginTop: "4px" }}>
+            Click to expand
+          </div>
         </div>
       )}
+
+      <ContentModal
+        isOpen={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title="Extracted Content"
+        content={articleText}
+      />
 
       <Handle
         type="source"

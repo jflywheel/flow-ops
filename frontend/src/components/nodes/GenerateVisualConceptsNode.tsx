@@ -1,6 +1,7 @@
 import { Handle, Position } from "@xyflow/react";
 import { useState } from "react";
 import { generateVisualConcepts } from "../../api";
+import ContentModal from "../ContentModal";
 
 // Visual concept structure from fwp-image-generator
 interface VisualConcept {
@@ -30,7 +31,7 @@ interface GenerateVisualConceptsNodeProps {
   };
 }
 
-type ModeType = "report" | "newsletter" | "advertorial";
+type ModeType = "report" | "newsletter" | "advertorial" | "custom";
 
 export default function GenerateVisualConceptsNode({ id, data }: GenerateVisualConceptsNodeProps) {
   const [loading, setLoading] = useState(false);
@@ -38,13 +39,14 @@ export default function GenerateVisualConceptsNode({ id, data }: GenerateVisualC
   const [concepts, setConcepts] = useState<VisualConcept[]>(data.concepts || []);
   const [done, setDone] = useState(false);
   const [showOptions, setShowOptions] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
 
   // Options
-  const [count, setCount] = useState(8);
-  const [mode, setMode] = useState<ModeType>("report");
+  const [count, setCount] = useState(5);
+  const [mode, setMode] = useState<ModeType>("custom"); // Default to custom for flexibility
 
   // Parse input to determine type
-  const parseInput = (): { report?: Report; advertorialContent?: string } | null => {
+  const parseInput = (): { report?: Report; advertorialContent?: string; customText?: string; detectedType: string } | null => {
     if (!data.inputValue) return null;
 
     try {
@@ -52,26 +54,29 @@ export default function GenerateVisualConceptsNode({ id, data }: GenerateVisualC
 
       // Check if it's a report (has sections or executiveSummary)
       if (parsed.sections || parsed.executiveSummary) {
-        return { report: parsed };
+        return { report: parsed, detectedType: "report" };
       }
 
       // Check if it's advertorial output (has headline and content)
       if (parsed.headline && parsed.content) {
-        return { advertorialContent: parsed.content };
+        return { advertorialContent: parsed.content, detectedType: "advertorial" };
       }
 
       // Check if it's just { content: ... }
       if (parsed.content) {
-        return { advertorialContent: parsed.content };
+        return { advertorialContent: parsed.content, detectedType: "advertorial" };
       }
-    } catch {
-      // Not JSON, might be raw HTML advertorial content
-      if (data.inputValue.includes("<") && data.inputValue.includes(">")) {
-        return { advertorialContent: data.inputValue };
-      }
-    }
 
-    return null;
+      // JSON but not a recognized structure - treat as custom text
+      return { customText: data.inputValue, detectedType: "custom" };
+    } catch {
+      // Not JSON - could be HTML advertorial or plain text
+      if (data.inputValue.includes("<") && data.inputValue.includes(">")) {
+        return { advertorialContent: data.inputValue, detectedType: "advertorial" };
+      }
+      // Plain text - use custom mode
+      return { customText: data.inputValue, detectedType: "custom" };
+    }
   };
 
   const parsedInput = parseInput();
@@ -79,7 +84,7 @@ export default function GenerateVisualConceptsNode({ id, data }: GenerateVisualC
 
   const handleGenerate = async () => {
     if (!parsedInput) {
-      setError("Connect a report or advertorial input first");
+      setError("Connect any text input first");
       return;
     }
 
@@ -88,11 +93,17 @@ export default function GenerateVisualConceptsNode({ id, data }: GenerateVisualC
     setDone(false);
 
     try {
+      // Determine what to send based on mode
+      const report = mode === "report" || mode === "newsletter" ? parsedInput.report : null;
+      const advertorialContent = mode === "advertorial" ? parsedInput.advertorialContent : undefined;
+      const customText = mode === "custom" ? (parsedInput.customText || parsedInput.advertorialContent || JSON.stringify(parsedInput.report)) : undefined;
+
       const result = await generateVisualConcepts(
-        (parsedInput.report || {}) as Record<string, unknown>,
+        report as Record<string, unknown> | null,
         count,
         mode,
-        parsedInput.advertorialContent
+        advertorialContent,
+        customText
       );
 
       setConcepts(result.concepts);
@@ -175,7 +186,9 @@ export default function GenerateVisualConceptsNode({ id, data }: GenerateVisualC
             lineHeight: "1.4",
           }}
         >
-          {parsedInput?.report ? "Report connected" : "Advertorial connected"}
+          {parsedInput?.detectedType === "report" && "Report connected"}
+          {parsedInput?.detectedType === "advertorial" && "Advertorial connected"}
+          {parsedInput?.detectedType === "custom" && "Text connected"}
         </div>
       )}
 
@@ -238,6 +251,7 @@ export default function GenerateVisualConceptsNode({ id, data }: GenerateVisualC
                 fontFamily: "inherit",
               }}
             >
+              <option value="custom">Custom (any text)</option>
               <option value="report">Report</option>
               <option value="newsletter">Newsletter</option>
               <option value="advertorial">Advertorial</option>
@@ -293,6 +307,7 @@ export default function GenerateVisualConceptsNode({ id, data }: GenerateVisualC
 
       {done && concepts.length > 0 && !loading && (
         <div
+          onClick={() => setModalOpen(true)}
           style={{
             marginTop: "10px",
             padding: "8px 10px",
@@ -301,14 +316,22 @@ export default function GenerateVisualConceptsNode({ id, data }: GenerateVisualC
             fontSize: "11px",
             color: "#0d9488",
             lineHeight: "1.4",
+            cursor: "pointer",
           }}
         >
           <strong>{concepts.length} concepts generated</strong>
           <div style={{ marginTop: "4px", fontSize: "10px", color: "#14b8a6" }}>
-            {concepts[0]?.targetEmotion || "Ready to use"}
+            Click to expand
           </div>
         </div>
       )}
+
+      <ContentModal
+        isOpen={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title="Visual Concepts"
+        content={concepts}
+      />
 
       <Handle
         type="source"

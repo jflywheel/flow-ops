@@ -1,6 +1,7 @@
 import { Handle, Position } from "@xyflow/react";
 import { useState } from "react";
 import { generateReport } from "../../api";
+import ContentModal from "../ContentModal";
 
 interface ReportOutput {
   executiveSummary: string;
@@ -29,6 +30,7 @@ export default function GenerateReportNode({ id, data }: GenerateReportNodeProps
   const [report, setReport] = useState<ReportOutput | null>(data.report || null);
   const [showOptions, setShowOptions] = useState(false);
   const [episodeTitle, setEpisodeTitle] = useState("");
+  const [modalOpen, setModalOpen] = useState(false);
 
   // Accept transcript or plain text input
   const inputText = data.transcript || data.inputValue || "";
@@ -220,6 +222,7 @@ export default function GenerateReportNode({ id, data }: GenerateReportNodeProps
 
       {report && !loading && (
         <div
+          onClick={() => setModalOpen(true)}
           style={{
             marginTop: "10px",
             padding: "8px 10px",
@@ -230,12 +233,24 @@ export default function GenerateReportNode({ id, data }: GenerateReportNodeProps
             lineHeight: "1.4",
             maxHeight: "60px",
             overflow: "hidden",
+            cursor: "pointer",
           }}
+          title="Click to expand"
         >
           <strong>Summary:</strong> {report.executiveSummary.slice(0, 80)}
           {report.executiveSummary.length > 80 && "..."}
+          <div style={{ fontSize: "10px", color: "#8b5cf6", marginTop: "4px" }}>
+            Click to expand
+          </div>
         </div>
       )}
+
+      <ContentModal
+        isOpen={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title="Generated Report"
+        content={report || {}}
+      />
 
       <Handle
         type="source"

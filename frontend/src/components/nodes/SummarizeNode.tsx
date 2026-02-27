@@ -1,6 +1,7 @@
 import { Handle, Position } from "@xyflow/react";
 import { useState } from "react";
 import { summarize } from "../../api";
+import ContentModal from "../ContentModal";
 
 interface SummarizeNodeProps {
   id: string;
@@ -18,6 +19,7 @@ export default function SummarizeNode({ id, data }: SummarizeNodeProps) {
   const [summary, setSummary] = useState(data.summary || "");
   const [done, setDone] = useState(false);
   const [showOptions, setShowOptions] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
 
   // Options
   const [maxLength, setMaxLength] = useState(200);
@@ -236,6 +238,7 @@ export default function SummarizeNode({ id, data }: SummarizeNodeProps) {
 
       {done && summary && !loading && (
         <div
+          onClick={() => setModalOpen(true)}
           style={{
             marginTop: "10px",
             padding: "8px 10px",
@@ -246,12 +249,23 @@ export default function SummarizeNode({ id, data }: SummarizeNodeProps) {
             lineHeight: "1.4",
             maxHeight: "80px",
             overflow: "hidden",
+            cursor: "pointer",
           }}
         >
           {summary.slice(0, 150)}
           {summary.length > 150 && "..."}
+          <div style={{ fontSize: "10px", color: "#f97316", marginTop: "4px" }}>
+            Click to expand
+          </div>
         </div>
       )}
+
+      <ContentModal
+        isOpen={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title="Summary"
+        content={summary}
+      />
 
       <Handle
         type="source"

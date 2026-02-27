@@ -261,9 +261,14 @@ Keep it under 200 words. Only output the prompt itself, no explanations.${extraP
         let imageUrl = "";
 
         // Select Gemini model
-        const geminiImageModel = selectedModel === "gemini-pro"
-          ? "gemini-3-pro-image-preview"
-          : "gemini-2.5-flash-image";
+        let geminiImageModel: string;
+        if (selectedModel === "gemini-pro") {
+          geminiImageModel = "gemini-3-pro-image-preview";
+        } else if (selectedModel === "gemini-3.1-flash") {
+          geminiImageModel = "gemini-3.1-flash-image-preview"; // Nano Banana 2 - newest model
+        } else {
+          geminiImageModel = "gemini-2.5-flash-image";
+        }
 
         const imageResponse = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/${geminiImageModel}:generateContent`,
@@ -823,7 +828,13 @@ ${truncatedText}`;
 
       // Transcribe operation - transcribes audio using AssemblyAI
       if (path === "/api/operations/transcribe" && request.method === "POST") {
-        const body = await request.json() as { audioUrl?: string };
+        const body = await request.json() as {
+          audioUrl?: string;
+          speakerLabels?: boolean;
+          speakerIdentification?: boolean;
+          speakerType?: "name" | "role";
+          knownValues?: string[];
+        };
 
         if (!body.audioUrl) {
           return Response.json(
@@ -833,19 +844,40 @@ ${truncatedText}`;
         }
 
         const assemblyKey = await env.ASSEMBLYAI_API_KEY.get();
+        const useSpeakerLabels = body.speakerLabels !== false; // Default to true
+        const useSpeakerIdentification = body.speakerIdentification === true; // Default to false (add-on cost)
+        const speakerType = body.speakerType || "name";
+        const knownValues = body.knownValues || [];
+
+        // Build request body for AssemblyAI
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const transcriptRequest: Record<string, any> = {
+          audio_url: body.audioUrl,
+          speech_model: "best",
+          speaker_labels: useSpeakerLabels,
+        };
+
+        // Add speaker identification via Speech Understanding API if enabled
+        if (useSpeakerIdentification && useSpeakerLabels) {
+          transcriptRequest.speech_understanding = {
+            request: {
+              speaker_identification: {
+                speaker_type: speakerType,
+                ...(knownValues.length > 0 && { known_values: knownValues }),
+              },
+            },
+          };
+        }
 
         // Step 1: Submit transcription request to AssemblyAI
-        console.log("Submitting to AssemblyAI:", body.audioUrl);
+        console.log("Submitting to AssemblyAI:", body.audioUrl, "speaker_labels:", useSpeakerLabels, "speaker_identification:", useSpeakerIdentification);
         const submitResponse = await fetch("https://api.assemblyai.com/v2/transcript", {
           method: "POST",
           headers: {
             "Authorization": assemblyKey,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({
-            audio_url: body.audioUrl,
-            speech_model: "best",
-          }),
+          body: JSON.stringify(transcriptRequest),
         });
 
         if (!submitResponse.ok) {
@@ -864,7 +896,29 @@ ${truncatedText}`;
         // Step 2: Poll for completion (max 10 minutes for long podcasts)
         const maxAttempts = 120; // 120 * 5s = 10 minutes
         let attempts = 0;
-        let transcript = "";
+
+        // Types for AssemblyAI response with speaker diarization/identification
+        interface Utterance {
+          speaker: string;
+          text: string;
+          start: number;
+          end: number;
+        }
+        interface SpeechUnderstandingResponse {
+          utterances?: Utterance[];
+        }
+        interface PollData {
+          status: string;
+          text?: string;
+          utterances?: Utterance[];
+          error?: string;
+          speech_understanding?: {
+            status?: string;
+            response?: SpeechUnderstandingResponse;
+          };
+        }
+
+        let pollData: PollData | null = null;
 
         while (attempts < maxAttempts) {
           await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds between polls
@@ -882,11 +936,10 @@ ${truncatedText}`;
             );
           }
 
-          const pollData = await pollResponse.json() as { status: string; text?: string; error?: string };
+          pollData = await pollResponse.json() as PollData;
           console.log("AssemblyAI status:", pollData.status, "attempt:", attempts + 1);
 
           if (pollData.status === "completed") {
-            transcript = pollData.text || "";
             break;
           } else if (pollData.status === "error") {
             return Response.json(
@@ -898,11 +951,34 @@ ${truncatedText}`;
           attempts++;
         }
 
-        if (!transcript) {
+        if (!pollData || pollData.status !== "completed") {
           return Response.json(
             { error: "Transcription timed out", code: "TIMEOUT" },
             { status: 500, headers: corsHeaders }
           );
+        }
+
+        // Use speaker identification results if available, otherwise fall back to diarization
+        const utterances = pollData.speech_understanding?.response?.utterances || pollData.utterances;
+
+        // Format transcript with speaker labels if available
+        let transcript = "";
+        if (utterances && utterances.length > 0) {
+          // Check if we have real names (from speaker identification) or generic labels (A, B, C)
+          const hasRealNames = utterances.some((u: Utterance) => u.speaker && u.speaker.length > 1);
+
+          // Format with speaker labels and timestamps
+          transcript = utterances.map((u: Utterance) => {
+            const minutes = Math.floor(u.start / 60000);
+            const seconds = Math.floor((u.start % 60000) / 1000);
+            const timestamp = `[${minutes}:${seconds.toString().padStart(2, '0')}]`;
+            // Use "Speaker A" format only for generic single-letter labels
+            const speakerLabel = hasRealNames ? u.speaker : `Speaker ${u.speaker}`;
+            return `${timestamp} ${speakerLabel}:\n${u.text}`;
+          }).join("\n\n");
+        } else {
+          // Fallback to plain text
+          transcript = pollData.text || "";
         }
 
         return Response.json({ transcript }, { headers: corsHeaders });
@@ -1381,11 +1457,19 @@ Respond in JSON format with fear, greed, curiosity, urgency objects containing h
           );
         }
 
-        // Parse JSON from Claude's response (it may be wrapped in markdown code blocks)
+        // Parse JSON from Claude's response (handle markdown code blocks and extra text)
         let jsonText = rawText;
-        const jsonMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)```/);
-        if (jsonMatch) {
-          jsonText = jsonMatch[1].trim();
+
+        // Remove ```json ... ``` or ``` ... ``` blocks
+        const codeBlockMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)```/);
+        if (codeBlockMatch) {
+          jsonText = codeBlockMatch[1].trim();
+        }
+
+        // Try to find JSON object if there's extra text
+        const jsonObjMatch = jsonText.match(/\{[\s\S]*\}/);
+        if (jsonObjMatch) {
+          jsonText = jsonObjMatch[0];
         }
 
         try {
@@ -1569,12 +1653,26 @@ WRITING RULES:
           );
         }
 
-        // Parse the JSON response
+        // Parse the JSON response - handle markdown code blocks
         let landingPages: LandingPagesResponse;
         try {
-          landingPages = JSON.parse(responseText);
+          let jsonText = responseText;
+
+          // Remove ```json ... ``` or ``` ... ``` blocks
+          const codeBlockMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
+          if (codeBlockMatch) {
+            jsonText = codeBlockMatch[1].trim();
+          }
+
+          // Try to find JSON object if there's extra text
+          const jsonMatch = jsonText.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            jsonText = jsonMatch[0];
+          }
+
+          landingPages = JSON.parse(jsonText);
         } catch {
-          console.error("Failed to parse landing pages JSON:", responseText);
+          console.error("Failed to parse landing pages JSON:", responseText.slice(0, 500));
           return Response.json(
             { error: "Invalid JSON response from AI", code: "PARSE_ERROR" },
             { status: 500, headers: corsHeaders }
@@ -1748,12 +1846,27 @@ Respond in JSON: {"headline": "...", "content": "<p>...</p>..."}`;
           );
         }
 
-        // Parse the JSON response
+        // Parse the JSON response - handle markdown code blocks
         let advertorial: { headline: string; content: string };
         try {
-          advertorial = JSON.parse(responseText);
+          // Try to extract JSON from markdown code blocks if present
+          let jsonText = responseText;
+
+          // Remove ```json ... ``` or ``` ... ``` blocks
+          const codeBlockMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
+          if (codeBlockMatch) {
+            jsonText = codeBlockMatch[1].trim();
+          }
+
+          // Try to find JSON object if there's extra text
+          const jsonMatch = jsonText.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            jsonText = jsonMatch[0];
+          }
+
+          advertorial = JSON.parse(jsonText);
         } catch {
-          console.error("Failed to parse advertorial JSON:", responseText);
+          console.error("Failed to parse advertorial JSON:", responseText.slice(0, 500));
           return Response.json(
             { error: "Invalid JSON response from AI", code: "PARSE_ERROR" },
             { status: 500, headers: corsHeaders }
@@ -1864,12 +1977,26 @@ Example format:
           );
         }
 
-        // Parse the JSON response
+        // Parse the JSON response - handle markdown code blocks
         let adCopy: AdCopyResponse;
         try {
-          adCopy = JSON.parse(responseText);
+          let jsonText = responseText;
+
+          // Remove ```json ... ``` or ``` ... ``` blocks
+          const codeBlockMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
+          if (codeBlockMatch) {
+            jsonText = codeBlockMatch[1].trim();
+          }
+
+          // Try to find JSON object if there's extra text
+          const jsonMatch = jsonText.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            jsonText = jsonMatch[0];
+          }
+
+          adCopy = JSON.parse(jsonText);
         } catch {
-          console.error("Failed to parse ad copy JSON:", responseText);
+          console.error("Failed to parse ad copy JSON:", responseText.slice(0, 500));
           return Response.json(
             { error: "Invalid JSON response from AI", code: "PARSE_ERROR" },
             { status: 500, headers: corsHeaders }
@@ -1884,27 +2011,34 @@ Example format:
         const body = await request.json() as {
           report?: ReportObject;
           count?: number;
-          mode?: "report" | "newsletter" | "advertorial";
+          mode?: "report" | "newsletter" | "advertorial" | "custom";
           advertorialContent?: string;
+          customText?: string;
         };
 
-        if (!body.report && body.mode !== "advertorial") {
+        // Validate based on mode
+        const mode = body.mode || "report";
+        if (mode === "custom" && !body.customText) {
+          return Response.json(
+            { error: "Missing customText for custom mode", code: "MISSING_TEXT" },
+            { status: 400, headers: corsHeaders }
+          );
+        }
+        if (mode === "advertorial" && !body.advertorialContent) {
+          return Response.json(
+            { error: "Missing advertorialContent for advertorial mode", code: "MISSING_CONTENT" },
+            { status: 400, headers: corsHeaders }
+          );
+        }
+        if ((mode === "report" || mode === "newsletter") && !body.report) {
           return Response.json(
             { error: "Missing report field", code: "MISSING_REPORT" },
             { status: 400, headers: corsHeaders }
           );
         }
 
-        if (body.mode === "advertorial" && !body.advertorialContent) {
-          return Response.json(
-            { error: "Missing advertorialContent for advertorial mode", code: "MISSING_CONTENT" },
-            { status: 400, headers: corsHeaders }
-          );
-        }
-
         const anthropicKey = await env.FWP_ANTHROPIC_API_KEY.get();
         const count = body.count || 6;
-        const mode = body.mode || "report";
 
         // Build prompt based on mode
         let prompt = "";
@@ -1983,7 +2117,7 @@ Respond in JSON:
     }
   ]
 }`;
-        } else {
+        } else if (mode === "advertorial") {
           // Advertorial mode
           prompt = `Generate ${count} DIVERSE visual concepts for direct response ad images. These ads promote a financial advertorial article.
 
@@ -2026,6 +2160,49 @@ Respond in JSON:
     }
   ]
 }`;
+        } else if (mode === "custom") {
+          // Custom mode - accept any text
+          prompt = `Generate ${count} DIVERSE visual concepts for ad images based on the following content.
+
+CONTENT:
+${body.customText?.slice(0, 10000)}
+
+YOUR MISSION: Create ${count} highly varied, scroll-stopping visual concepts that relate to the content above. The concepts should work as compelling ad images.
+
+MIX THESE TYPES OF VISUALS:
+1. PEOPLE (35%): Real, relatable people who represent the target audience or desired outcome
+   - Vary ages (25-65), genders, and settings
+   - Show genuine emotions: curiosity, confidence, excitement, satisfaction
+   - Professional but approachable appearance
+
+2. PRODUCT/TOPIC IMAGERY (40%): Photorealistic visuals directly relevant to the content
+   - If tech-related: devices, equipment, infrastructure
+   - If health-related: wellness scenes, natural ingredients, lifestyle
+   - If finance-related: success imagery, professional settings
+   - If education-related: learning environments, achievement moments
+
+3. LIFESTYLE & ASPIRATION (25%): The positive outcome or transformation
+   - Success and achievement moments
+   - Improved quality of life scenes
+   - Before/after implications (show the "after")
+
+CRITICAL REQUIREMENTS:
+1. Each concept is ONE clear focal point
+2. NO text, charts, graphs, numbers, or UI elements in the image
+3. VARY demographics and color palettes widely
+4. All human images must feel like REAL PHOTOGRAPHS not AI art
+5. Concepts should evoke emotional responses: curiosity, desire, trust, urgency
+
+Respond in JSON:
+{
+  "concepts": [
+    {
+      "concept": "Highly detailed visual description with specific details about subject, setting, lighting, mood",
+      "targetEmotion": "The specific emotional response this should trigger",
+      "colorScheme": "Specific color palette"
+    }
+  ]
+}`;
         }
 
         const anthropicResponse = await fetch("https://api.anthropic.com/v1/messages", {
@@ -2037,7 +2214,7 @@ Respond in JSON:
           },
           body: JSON.stringify({
             model: "claude-3-haiku-20240307",
-            max_tokens: 4000,
+            max_tokens: 4096,
             messages: [{ role: "user", content: prompt }],
           }),
         });
@@ -2057,18 +2234,148 @@ Respond in JSON:
 
         const responseText = anthropicData.content?.[0]?.text || "";
 
-        // Parse JSON from response (handle markdown code blocks)
+        // Parse JSON from response (handle markdown code blocks and extra text)
         let jsonStr = responseText;
-        const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
-        if (jsonMatch) {
-          jsonStr = jsonMatch[1].trim();
+
+        // Remove ```json ... ``` or ``` ... ``` blocks
+        const codeBlockMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
+        if (codeBlockMatch) {
+          jsonStr = codeBlockMatch[1].trim();
+        }
+
+        // Try to find JSON object if there's extra text
+        const jsonObjMatch = jsonStr.match(/\{[\s\S]*\}/);
+        if (jsonObjMatch) {
+          jsonStr = jsonObjMatch[0];
         }
 
         try {
           const parsed = JSON.parse(jsonStr) as { concepts: Array<{ concept: string; targetEmotion: string; colorScheme: string }> };
           return Response.json({ concepts: parsed.concepts }, { headers: corsHeaders });
         } catch {
-          console.error("Failed to parse concepts JSON:", responseText);
+          console.error("Failed to parse concepts JSON:", responseText.slice(0, 500));
+          return Response.json(
+            { error: "Failed to parse response", code: "PARSE_ERROR" },
+            { status: 500, headers: corsHeaders }
+          );
+        }
+      }
+
+      // Generate Meta headlines operation - creates ad copy from any text
+      if (path === "/api/operations/generate-meta-headlines" && request.method === "POST") {
+        const body = await request.json() as { text?: string };
+
+        if (!body.text) {
+          return Response.json(
+            { error: "Missing text field", code: "MISSING_TEXT" },
+            { status: 400, headers: corsHeaders }
+          );
+        }
+
+        const anthropicKey = await env.FWP_ANTHROPIC_API_KEY.get();
+        const today = new Date().toISOString().split("T")[0];
+
+        // Truncate content for the prompt
+        const contentPreview = body.text.slice(0, 10000);
+
+        const prompt = `You are a direct response copywriter creating Facebook/Meta ad copy. Generate scroll-stopping ad copy based on this content.
+
+TODAY'S DATE: ${today}
+
+CONTENT:
+${contentPreview}
+
+YOUR TASK:
+Generate 5 Primary Texts and 5 Headlines for Meta ads.
+
+PRIMARY TEXT (shown above the image):
+- EXACTLY 125 characters or less each
+- The hook that stops the scroll
+- Create curiosity, urgency, or emotional pull
+- Mix different angles: fear of missing out, greed/opportunity, curiosity/secrets, urgency/time pressure, social proof
+
+HEADLINE (shown below the image, above the CTA button):
+- EXACTLY 255 characters or less each
+- Expands on the primary text
+- Reinforces the value proposition
+- Creates desire to click
+
+STYLE GUIDELINES (CRITICAL):
+- Conversational, not corporate
+- Sentence case (not Title Case)
+- Questions work great for curiosity
+- Specific numbers and details beat vague claims
+- No clickbait that doesn't deliver
+- No ALL CAPS words
+- No excessive punctuation (!!!)
+- ASCII characters only, no emojis
+- Professional but accessible
+- Assume the reader is skeptical but interested
+
+WHAT MAKES META COPY WORK:
+- Pattern interrupts ("Wait, did you know...")
+- Direct address ("You've probably noticed...")
+- Contrarian takes ("Everyone's wrong about...")
+- Specificity ("The 3 things most people miss...")
+- Implied insider knowledge ("What experts aren't telling you...")
+- Relatable problems ("Tired of...")
+
+Respond in JSON:
+{
+  "primaryTexts": ["text1", "text2", "text3", "text4", "text5"],
+  "headlines": ["headline1", "headline2", "headline3", "headline4", "headline5"]
+}
+
+IMPORTANT: Count characters carefully. Primary texts must be ≤125 chars. Headlines must be ≤255 chars. Ads get rejected if limits are exceeded.`;
+
+        const anthropicResponse = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "x-api-key": anthropicKey,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "claude-3-haiku-20240307",
+            max_tokens: 2000,
+            messages: [{ role: "user", content: prompt }],
+          }),
+        });
+
+        if (!anthropicResponse.ok) {
+          const errorText = await anthropicResponse.text();
+          console.error("Anthropic API error:", errorText);
+          return Response.json(
+            { error: "Failed to generate headlines", code: "ANTHROPIC_ERROR" },
+            { status: 500, headers: corsHeaders }
+          );
+        }
+
+        const anthropicData = await anthropicResponse.json() as {
+          content?: Array<{ type: string; text?: string }>;
+        };
+
+        const responseText = anthropicData.content?.[0]?.text || "";
+
+        // Parse JSON from response
+        let jsonStr = responseText;
+        const codeBlockMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
+        if (codeBlockMatch) {
+          jsonStr = codeBlockMatch[1].trim();
+        }
+        const jsonObjMatch = jsonStr.match(/\{[\s\S]*\}/);
+        if (jsonObjMatch) {
+          jsonStr = jsonObjMatch[0];
+        }
+
+        try {
+          const parsed = JSON.parse(jsonStr) as { primaryTexts: string[]; headlines: string[] };
+          return Response.json({
+            primaryTexts: parsed.primaryTexts || [],
+            headlines: parsed.headlines || []
+          }, { headers: corsHeaders });
+        } catch {
+          console.error("Failed to parse headlines JSON:", responseText.slice(0, 500));
           return Response.json(
             { error: "Failed to parse response", code: "PARSE_ERROR" },
             { status: 500, headers: corsHeaders }
@@ -2182,11 +2489,19 @@ Respond in this exact JSON format:
 
         const responseText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "";
 
-        // Parse JSON from response
+        // Parse JSON from response (handle markdown code blocks and extra text)
         let jsonStr = responseText;
-        const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
-        if (jsonMatch) {
-          jsonStr = jsonMatch[1].trim();
+
+        // Remove ```json ... ``` or ``` ... ``` blocks
+        const codeBlockMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
+        if (codeBlockMatch) {
+          jsonStr = codeBlockMatch[1].trim();
+        }
+
+        // Try to find JSON object if there's extra text
+        const jsonObjMatch = jsonStr.match(/\{[\s\S]*\}/);
+        if (jsonObjMatch) {
+          jsonStr = jsonObjMatch[0];
         }
 
         try {

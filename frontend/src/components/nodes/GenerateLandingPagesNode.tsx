@@ -1,6 +1,7 @@
 import { Handle, Position } from "@xyflow/react";
 import { useState } from "react";
 import { generateLandingPages } from "../../api";
+import ContentModal from "../ContentModal";
 
 interface LandingPage {
   headline: string;
@@ -40,6 +41,7 @@ export default function GenerateLandingPagesNode({ id, data }: GenerateLandingPa
   );
   const [showOptions, setShowOptions] = useState(false);
   const [mode, setMode] = useState<"report" | "newsletter">("report");
+  const [modalOpen, setModalOpen] = useState(false);
 
   const report = data.report;
 
@@ -233,6 +235,7 @@ export default function GenerateLandingPagesNode({ id, data }: GenerateLandingPa
 
       {landingPages && !loading && (
         <div
+          onClick={() => setModalOpen(true)}
           style={{
             marginTop: "10px",
             padding: "8px 10px",
@@ -241,11 +244,22 @@ export default function GenerateLandingPagesNode({ id, data }: GenerateLandingPa
             fontSize: "11px",
             color: "#065f46",
             lineHeight: "1.4",
+            cursor: "pointer",
           }}
         >
           {pageCount} pages generated
+          <div style={{ fontSize: "10px", color: "#10b981", marginTop: "4px" }}>
+            Click to expand
+          </div>
         </div>
       )}
+
+      <ContentModal
+        isOpen={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title="Landing Pages"
+        content={landingPages || {}}
+      />
 
       <Handle
         type="source"

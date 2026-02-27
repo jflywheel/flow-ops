@@ -1,6 +1,7 @@
 import { Handle, Position } from "@xyflow/react";
 import { useState } from "react";
 import { generateAdvertorial } from "../../api";
+import ContentModal from "../ContentModal";
 
 // Report structure from fwp-report-generator
 interface ReportSection {
@@ -35,7 +36,9 @@ export default function GenerateAdvertorialNode({ id, data }: GenerateAdvertoria
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [headline, setHeadline] = useState(data.headline || "");
+  const [content, setContent] = useState(data.content || "");
   const [done, setDone] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
 
   // Try to parse input as report object
   const getReport = (): Report | null => {
@@ -64,6 +67,7 @@ export default function GenerateAdvertorialNode({ id, data }: GenerateAdvertoria
     try {
       const result = await generateAdvertorial(report as Record<string, unknown>);
       setHeadline(result.headline);
+      setContent(result.content);
       setDone(true);
 
       // Store result and propagate to connected nodes
@@ -218,6 +222,7 @@ export default function GenerateAdvertorialNode({ id, data }: GenerateAdvertoria
 
       {done && headline && !loading && (
         <div
+          onClick={() => setModalOpen(true)}
           style={{
             marginTop: "10px",
             padding: "8px 10px",
@@ -228,12 +233,24 @@ export default function GenerateAdvertorialNode({ id, data }: GenerateAdvertoria
             lineHeight: "1.4",
             maxHeight: "60px",
             overflow: "hidden",
+            cursor: "pointer",
           }}
+          title="Click to expand"
         >
           <strong>Headline:</strong> {headline.slice(0, 80)}
           {headline.length > 80 && "..."}
+          <div style={{ fontSize: "10px", color: "#22c55e", marginTop: "4px" }}>
+            Click to expand
+          </div>
         </div>
       )}
+
+      <ContentModal
+        isOpen={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title="Advertorial"
+        content={`<h1>${headline}</h1>\n${content}`}
+      />
 
       <Handle
         type="source"

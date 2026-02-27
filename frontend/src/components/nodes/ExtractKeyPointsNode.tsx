@@ -1,6 +1,7 @@
 import { Handle, Position } from "@xyflow/react";
 import { useState } from "react";
 import { extractKeyPoints } from "../../api";
+import ContentModal from "../ContentModal";
 
 interface ExtractKeyPointsNodeProps {
   id: string;
@@ -18,17 +19,33 @@ export default function ExtractKeyPointsNode({ id, data }: ExtractKeyPointsNodeP
   const [points, setPoints] = useState<string[]>(data.points || []);
   const [done, setDone] = useState(false);
   const [showOptions, setShowOptions] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
 
   // Options
   const [maxPoints, setMaxPoints] = useState(5);
 
-  // Extract text from input (could be string or { text: string })
+  // Extract text from input (could be string, { text: string }, or report object)
   const getText = (): string | null => {
     if (!data.inputValue) return null;
 
     // Try parsing as JSON first
     try {
       const parsed = JSON.parse(data.inputValue);
+
+      // Handle report object (has executiveSummary and sections)
+      if (parsed.executiveSummary || parsed.sections) {
+        const parts: string[] = [];
+        if (parsed.executiveSummary) {
+          parts.push(parsed.executiveSummary);
+        }
+        if (parsed.sections && Array.isArray(parsed.sections)) {
+          for (const section of parsed.sections) {
+            if (section.content) parts.push(section.content);
+          }
+        }
+        return parts.join("\n\n");
+      }
+
       if (typeof parsed.text === "string") return parsed.text;
       if (typeof parsed === "string") return parsed;
     } catch {
@@ -236,6 +253,7 @@ export default function ExtractKeyPointsNode({ id, data }: ExtractKeyPointsNodeP
 
       {done && points.length > 0 && !loading && (
         <div
+          onClick={() => setModalOpen(true)}
           style={{
             marginTop: "10px",
             padding: "8px 10px",
@@ -246,6 +264,7 @@ export default function ExtractKeyPointsNode({ id, data }: ExtractKeyPointsNodeP
             lineHeight: "1.5",
             maxHeight: "100px",
             overflow: "hidden",
+            cursor: "pointer",
           }}
         >
           {points.slice(0, 3).map((point, i) => (
@@ -253,13 +272,18 @@ export default function ExtractKeyPointsNode({ id, data }: ExtractKeyPointsNodeP
               • {point.slice(0, 40)}{point.length > 40 && "..."}
             </div>
           ))}
-          {points.length > 3 && (
-            <div style={{ fontStyle: "italic", color: "#10b981" }}>
-              +{points.length - 3} more points
-            </div>
-          )}
+          <div style={{ fontSize: "10px", color: "#10b981", marginTop: "4px" }}>
+            Click to expand ({points.length} points)
+          </div>
         </div>
       )}
+
+      <ContentModal
+        isOpen={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title="Key Points"
+        content={points.map((p, i) => `${i + 1}. ${p}`).join("\n\n")}
+      />
 
       <Handle
         type="source"

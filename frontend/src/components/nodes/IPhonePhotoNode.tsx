@@ -32,7 +32,7 @@ export default function IPhonePhotoNode({ id, data }: IPhonePhotoNodeProps) {
   const [showOptions, setShowOptions] = useState(false);
   const [extraInstructions, setExtraInstructions] = useState("");
   const [format, setFormat] = useState<"square" | "landscape" | "portrait" | "vertical">("square");
-  const [model, setModel] = useState<"gemini-flash" | "gemini-pro">("gemini-flash");
+  const [model, setModel] = useState<"gemini-flash" | "gemini-pro" | "gemini-3.1-flash">("gemini-flash");
   const [useRealismPrompt, setUseRealismPrompt] = useState(false);
 
   const inputValue = data.inputValue || "";
@@ -305,7 +305,7 @@ ABSOLUTELY FORBIDDEN:
             </label>
             <select
               value={model}
-              onChange={(e) => setModel(e.target.value as "gemini-flash" | "gemini-pro")}
+              onChange={(e) => setModel(e.target.value as "gemini-flash" | "gemini-pro" | "gemini-3.1-flash")}
               style={{
                 width: "100%",
                 padding: "6px 8px",
@@ -315,6 +315,7 @@ ABSOLUTELY FORBIDDEN:
                 fontFamily: "inherit",
               }}
             >
+              <option value="gemini-3.1-flash">Gemini 3.1 Flash (NEW)</option>
               <option value="gemini-flash">Gemini 2.5 Flash (~$0.04)</option>
               <option value="gemini-pro">Gemini 3 Pro (~$0.24)</option>
             </select>

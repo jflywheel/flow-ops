@@ -159,7 +159,11 @@ export async function animateImage(imageUrl: string, prompt?: string, aspectRati
 export async function transcribe(
   audioUrl?: string,
   audioBase64?: string,
-  mimeType?: string
+  mimeType?: string,
+  speakerLabels?: boolean, // Enable speaker diarization (default: true)
+  speakerIdentification?: boolean, // Enable speaker identification with real names (add-on)
+  speakerType?: "name" | "role", // Type of speaker labels (default: "name")
+  knownValues?: string[] // Optional list of expected speaker names/roles
 ): Promise<{ transcript: string }> {
   const token = getToken();
 
@@ -169,7 +173,15 @@ export async function transcribe(
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ audioUrl, audioBase64, mimeType }),
+    body: JSON.stringify({
+      audioUrl,
+      audioBase64,
+      mimeType,
+      speakerLabels,
+      speakerIdentification,
+      speakerType,
+      knownValues,
+    }),
   });
 
   if (!res.ok) {
@@ -405,10 +417,11 @@ interface VisualConcept {
 
 // Generate visual concepts for ad images (FWP pipeline)
 export async function generateVisualConcepts(
-  report: Record<string, unknown>,
+  report: Record<string, unknown> | null,
   count: number,
   mode: string,
-  advertorialContent?: string
+  advertorialContent?: string,
+  customText?: string
 ): Promise<{ concepts: VisualConcept[] }> {
   const token = getToken();
 
@@ -418,7 +431,7 @@ export async function generateVisualConcepts(
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ report, count, mode, advertorialContent }),
+    body: JSON.stringify({ report, count, mode, advertorialContent, customText }),
   });
 
   if (!res.ok) {
@@ -466,6 +479,30 @@ export async function extractKeyPoints(text: string, maxPoints?: number): Promis
   if (!res.ok) {
     const err = await res.json();
     throw new Error(err.error || "Failed to extract key points");
+  }
+
+  return res.json();
+}
+
+// Generate Meta ad headlines from any text
+export async function generateMetaHeadlines(text: string): Promise<{
+  primaryTexts: string[];
+  headlines: string[];
+}> {
+  const token = getToken();
+
+  const res = await fetch(`${API_BASE}/operations/generate-meta-headlines`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ text }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to generate headlines");
   }
 
   return res.json();

@@ -1,6 +1,7 @@
 import { Handle, Position } from "@xyflow/react";
 import { useState } from "react";
 import { transcribe } from "../../api";
+import ContentModal from "../ContentModal";
 
 interface TranscribeNodeProps {
   id: string;
@@ -20,6 +21,12 @@ export default function TranscribeNode({ id, data }: TranscribeNodeProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [transcript, setTranscript] = useState(data.transcript || "");
+  const [modalOpen, setModalOpen] = useState(false);
+  const [showOptions, setShowOptions] = useState(false);
+  const [speakerLabels, setSpeakerLabels] = useState(true); // Speaker diarization on by default
+  const [speakerIdentification, setSpeakerIdentification] = useState(true); // Speaker ID on by default
+  const [speakerType, setSpeakerType] = useState<"name" | "role">("name");
+  const [knownValues, setKnownValues] = useState(""); // Comma-separated names/roles
 
   const audioUrl = data.audioUrl || "";
   const audioBase64 = data.audioBase64 || "";
@@ -37,10 +44,20 @@ export default function TranscribeNode({ id, data }: TranscribeNodeProps) {
     setError("");
 
     try {
+      // Parse known values from comma-separated string
+      const knownValuesArray = knownValues
+        .split(",")
+        .map((v) => v.trim())
+        .filter((v) => v.length > 0);
+
       const result = await transcribe(
         audioUrl || undefined,
         audioBase64 || undefined,
-        mimeType || undefined
+        mimeType || undefined,
+        speakerLabels,
+        speakerIdentification && speakerLabels, // Only enable if diarization is also on
+        speakerType,
+        knownValuesArray.length > 0 ? knownValuesArray : undefined
       );
       setTranscript(result.transcript);
       data.updateNodeData?.(id, { transcript: result.transcript });
@@ -126,6 +143,129 @@ export default function TranscribeNode({ id, data }: TranscribeNodeProps) {
         </div>
       )}
 
+      {/* Options toggle */}
+      <div
+        onClick={() => setShowOptions(!showOptions)}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "4px",
+          fontSize: "11px",
+          color: "#86868b",
+          cursor: "pointer",
+          marginBottom: "10px",
+        }}
+      >
+        <span style={{ fontSize: "10px" }}>{showOptions ? "▼" : "▶"}</span>
+        <span>Options</span>
+      </div>
+
+      {showOptions && (
+        <div style={{ marginBottom: "10px" }}>
+          {/* Speaker diarization toggle */}
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              fontSize: "11px",
+              color: "#1d1d1f",
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={speakerLabels}
+              onChange={(e) => setSpeakerLabels(e.target.checked)}
+              style={{ margin: 0 }}
+            />
+            <span>Speaker diarization</span>
+          </label>
+          <div style={{ fontSize: "10px", color: "#86868b", marginTop: "4px", marginLeft: "20px" }}>
+            Identify different speakers (Speaker A, B, etc.)
+          </div>
+
+          {/* Speaker identification toggle (only show if diarization is on) */}
+          {speakerLabels && (
+            <>
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  fontSize: "11px",
+                  color: "#1d1d1f",
+                  cursor: "pointer",
+                  marginTop: "10px",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={speakerIdentification}
+                  onChange={(e) => setSpeakerIdentification(e.target.checked)}
+                  style={{ margin: 0 }}
+                />
+                <span>Speaker identification</span>
+              </label>
+              <div style={{ fontSize: "10px", color: "#86868b", marginTop: "4px", marginLeft: "20px" }}>
+                Use real names instead of Speaker A/B (add-on)
+              </div>
+
+              {/* Speaker identification options */}
+              {speakerIdentification && (
+                <div style={{ marginLeft: "20px", marginTop: "8px" }}>
+                  {/* Speaker type selector */}
+                  <div style={{ marginBottom: "8px" }}>
+                    <label style={{ fontSize: "10px", color: "#86868b", display: "block", marginBottom: "4px" }}>
+                      Label type
+                    </label>
+                    <select
+                      value={speakerType}
+                      onChange={(e) => setSpeakerType(e.target.value as "name" | "role")}
+                      style={{
+                        width: "100%",
+                        padding: "6px 8px",
+                        borderRadius: "6px",
+                        border: "1px solid #e5e5e5",
+                        fontSize: "11px",
+                        background: "#fff",
+                      }}
+                    >
+                      <option value="name">Names (e.g., John, Sarah)</option>
+                      <option value="role">Roles (e.g., Host, Guest)</option>
+                    </select>
+                  </div>
+
+                  {/* Known values input */}
+                  <div>
+                    <label style={{ fontSize: "10px", color: "#86868b", display: "block", marginBottom: "4px" }}>
+                      Known {speakerType === "name" ? "names" : "roles"} (optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={knownValues}
+                      onChange={(e) => setKnownValues(e.target.value)}
+                      placeholder={speakerType === "name" ? "John, Sarah, Mike" : "Host, Guest, Caller"}
+                      style={{
+                        width: "100%",
+                        padding: "6px 8px",
+                        borderRadius: "6px",
+                        border: "1px solid #e5e5e5",
+                        fontSize: "11px",
+                        boxSizing: "border-box",
+                      }}
+                    />
+                    <div style={{ fontSize: "9px", color: "#86868b", marginTop: "2px" }}>
+                      Comma-separated. Helps accuracy.
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
       <button
         onClick={handleTranscribe}
         disabled={loading}
@@ -173,6 +313,7 @@ export default function TranscribeNode({ id, data }: TranscribeNodeProps) {
 
       {transcript && !loading && (
         <div
+          onClick={() => setModalOpen(true)}
           style={{
             marginTop: "10px",
             padding: "8px 10px",
@@ -183,12 +324,24 @@ export default function TranscribeNode({ id, data }: TranscribeNodeProps) {
             lineHeight: "1.4",
             maxHeight: "60px",
             overflow: "hidden",
+            cursor: "pointer",
           }}
+          title="Click to expand"
         >
           {transcript.slice(0, 100)}
           {transcript.length > 100 && "..."}
+          <div style={{ fontSize: "10px", color: "#3b82f6", marginTop: "4px" }}>
+            Click to expand
+          </div>
         </div>
       )}
+
+      <ContentModal
+        isOpen={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title="Transcript"
+        content={transcript}
+      />
 
       <Handle
         type="source"

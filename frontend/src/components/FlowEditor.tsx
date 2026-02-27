@@ -1,4 +1,4 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, useEffect } from "react";
 import {
   ReactFlow,
   Controls,
@@ -50,6 +50,7 @@ import GenerateAdvertorialCopyNode from "./nodes/GenerateAdvertorialCopyNode";
 import GenerateVisualConceptsNode from "./nodes/GenerateVisualConceptsNode";
 import SummarizeNode from "./nodes/SummarizeNode";
 import ExtractKeyPointsNode from "./nodes/ExtractKeyPointsNode";
+import GenerateMetaHeadlinesNode from "./nodes/GenerateMetaHeadlinesNode";
 
 // Output nodes
 import ImageOutputNode from "./nodes/ImageOutputNode";
@@ -93,6 +94,7 @@ const nodeTypes: Record<string, any> = {
   generateVisualConcepts: GenerateVisualConceptsNode,
   summarize: SummarizeNode,
   extractKeyPoints: ExtractKeyPointsNode,
+  generateMetaHeadlines: GenerateMetaHeadlinesNode,
   // Outputs
   imageOutput: ImageOutputNode,
   reportPreview: ReportPreviewNode,
@@ -188,6 +190,21 @@ const presetFlows: PresetFlow[] = [
     ],
   },
   {
+    name: "Podcast to Report",
+    description: "Transcribe podcast → generate report",
+    nodes: [
+      { id: "podcast-1", type: "podcastRSS", position: { x: 50, y: 200 }, data: { audioUrl: "", title: "" } },
+      { id: "transcribe-1", type: "transcribe", position: { x: 350, y: 200 }, data: { inputValue: "", transcript: "" } },
+      { id: "report-1", type: "generateReport", position: { x: 650, y: 200 }, data: { inputValue: "", report: null } },
+      { id: "preview-1", type: "reportPreview", position: { x: 950, y: 200 }, data: { report: null } },
+    ],
+    edges: [
+      { id: "e1-2", source: "podcast-1", target: "transcribe-1", type: "smoothstep" },
+      { id: "e2-3", source: "transcribe-1", target: "report-1", type: "smoothstep" },
+      { id: "e3-4", source: "report-1", target: "preview-1", type: "smoothstep" },
+    ],
+  },
+  {
     name: "FWP Pipeline",
     description: "Podcast to ads (full pipeline)",
     nodes: [
@@ -245,6 +262,7 @@ const operations = [
   { type: "generateLandingPages", label: "Landing Pages", icon: "L", gradient: "linear-gradient(135deg, #10b981 0%, #047857 100%)" },
   { type: "generateAdvertorial", label: "Advertorial", icon: "A", gradient: "linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%)" },
   { type: "generateAdvertorialCopy", label: "Advertorial Copy", icon: "C", gradient: "linear-gradient(135deg, #ec4899 0%, #f43f5e 100%)" },
+  { type: "generateMetaHeadlines", label: "Meta Headlines", icon: "M", gradient: "linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)" },
   // Image generation
   { type: "generateVisualConcepts", label: "Visual Concepts", icon: "V", gradient: "linear-gradient(135deg, #14b8a6 0%, #0d9488 100%)" },
   { type: "iphonePhoto", label: "Generate Image", icon: "I", gradient: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)" },
@@ -272,6 +290,104 @@ export default function FlowEditor() {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const nodeIdCounter = useRef(1);
+  // Store ReactFlow instance for coordinate conversion and fitView
+  const reactFlowInstance = useRef<{
+    screenToFlowPosition: (pos: { x: number; y: number }) => { x: number; y: number };
+    fitView: (options?: { maxZoom?: number; padding?: number }) => void;
+  } | null>(null);
+  // Track when we need to fitView (after loading a preset)
+  const shouldFitView = useRef(false);
+
+  // Keep refs to current nodes/edges to avoid stale closures in callbacks
+  const nodesRef = useRef(nodes);
+  const edgesRef = useRef(edges);
+  useEffect(() => {
+    nodesRef.current = nodes;
+  }, [nodes]);
+  useEffect(() => {
+    edgesRef.current = edges;
+  }, [edges]);
+
+  // Sync data along edges whenever nodes or edges change
+  // This ensures that when you connect nodes after data exists, it flows through
+  const prevEdgesRef = useRef<string>("");
+  useEffect(() => {
+    // Only run when edges actually change (not on every node change)
+    const edgeKey = edges.map(e => `${e.source}-${e.target}`).join(",");
+    if (edgeKey === prevEdgesRef.current) return;
+    prevEdgesRef.current = edgeKey;
+
+    // List of output fields to propagate
+    const outputFields = [
+      "value", "outputValue", "transcript", "summary", "articleText",
+      "report", "copy", "landingPages", "concepts", "adCopy", "points",
+      "headline", "content", "imageUrl", "videoUrl", "outputUrl", "audioUrl",
+      "prompt", "title", "episodes",
+    ];
+
+    // For each edge, propagate data from source to target
+    let updates: { nodeId: string; data: Record<string, unknown> }[] = [];
+
+    for (const edge of edges) {
+      const sourceNode = nodes.find(n => n.id === edge.source);
+      const targetNode = nodes.find(n => n.id === edge.target);
+      if (!sourceNode || !targetNode) continue;
+
+      const sourceData = sourceNode.data as Record<string, unknown>;
+      const targetData = targetNode.data as Record<string, unknown>;
+      const dataToPropagate: Record<string, unknown> = {};
+
+      // Copy output fields that have values and aren't already in target
+      for (const field of outputFields) {
+        const val = sourceData[field];
+        if (val !== undefined && val !== "" && val !== null) {
+          // Only propagate if target doesn't have this value yet
+          if (targetData[field] !== val) {
+            dataToPropagate[field] = val;
+          }
+        }
+      }
+
+      // Set inputValue based on priority (generated outputs first, then inputs)
+      // Priority: report/structured output > summary > outputValue > transcript > value > articleText
+      if (sourceData.report) {
+        // Report is a structured output, serialize it
+        const reportJson = JSON.stringify(sourceData.report);
+        if (targetData.inputValue !== reportJson) {
+          dataToPropagate.inputValue = reportJson;
+        }
+      } else if (sourceData.summary && targetData.inputValue !== sourceData.summary) {
+        dataToPropagate.inputValue = sourceData.summary;
+      } else if (sourceData.outputValue && targetData.inputValue !== sourceData.outputValue) {
+        dataToPropagate.inputValue = sourceData.outputValue;
+      } else if (sourceData.transcript && targetData.inputValue !== sourceData.transcript) {
+        dataToPropagate.inputValue = sourceData.transcript;
+      } else if (sourceData.value && targetData.inputValue !== sourceData.value) {
+        dataToPropagate.inputValue = sourceData.value;
+      } else if (sourceData.articleText && targetData.inputValue !== sourceData.articleText) {
+        dataToPropagate.inputValue = sourceData.articleText;
+      }
+
+      if (Object.keys(dataToPropagate).length > 0) {
+        updates.push({ nodeId: edge.target, data: dataToPropagate });
+      }
+    }
+
+    // Apply all updates
+    if (updates.length > 0) {
+      setNodes(nds => {
+        let result = [...nds];
+        for (const update of updates) {
+          result = result.map(node =>
+            node.id === update.nodeId
+              ? { ...node, data: { ...node.data, ...update.data } }
+              : node
+          );
+        }
+        return result;
+      });
+    }
+  }, [edges, nodes, setNodes]);
 
   // Load a preset flow
   const loadPreset = useCallback((preset: PresetFlow) => {
@@ -292,85 +408,49 @@ export default function FlowEditor() {
       return Math.max(max, num);
     }, 0);
     nodeIdCounter.current = maxId + 1;
+
+    // Schedule fitView after nodes are rendered
+    shouldFitView.current = true;
   }, [nodes.length, setNodes, setEdges]);
+
+  // FitView after loading a preset (runs when nodes change and flag is set)
+  useEffect(() => {
+    if (shouldFitView.current && nodes.length > 0 && reactFlowInstance.current) {
+      // Small delay to ensure nodes are rendered
+      setTimeout(() => {
+        reactFlowInstance.current?.fitView({ maxZoom: 1, padding: 0.1 });
+        shouldFitView.current = false;
+      }, 50);
+    }
+  }, [nodes]);
 
   const onConnect = useCallback(
     (params: Connection) => {
-      // Add the edge
+      // Add the edge - the useEffect above will handle data propagation
       setEdges((eds) => addEdge({ ...params, type: "smoothstep" }, eds));
-
-      // Propagate data from source to target when connection is made
-      if (params.source && params.target) {
-        const sourceNode = nodes.find((n) => n.id === params.source);
-        if (sourceNode) {
-          const sourceData = sourceNode.data;
-
-          // Determine what data to propagate based on source node type
-          const dataToPropagate: Record<string, unknown> = {};
-
-          // Text input nodes have "value"
-          if (sourceData.value !== undefined) {
-            dataToPropagate.inputValue = sourceData.value;
-          }
-
-          // Operation nodes may have outputValue (enhance text)
-          if (sourceData.outputValue) {
-            dataToPropagate.inputValue = sourceData.outputValue;
-          }
-
-          // Image-producing nodes have imageUrl and prompt
-          if (sourceData.imageUrl) {
-            dataToPropagate.imageUrl = sourceData.imageUrl;
-            dataToPropagate.inputValue = sourceData.prompt || sourceData.imageUrl;
-          }
-          if (sourceData.prompt) {
-            dataToPropagate.prompt = sourceData.prompt;
-          }
-
-          // Video-producing nodes have videoUrl
-          if (sourceData.videoUrl) {
-            dataToPropagate.imageUrl = sourceData.videoUrl; // Output node uses imageUrl for both
-            dataToPropagate.inputValue = sourceData.videoUrl;
-          }
-
-          // Text overlay has outputUrl
-          if (sourceData.outputUrl) {
-            dataToPropagate.imageUrl = sourceData.outputUrl;
-          }
-
-          // Update the target node if we have data to propagate
-          if (Object.keys(dataToPropagate).length > 0) {
-            setNodes((nds) =>
-              nds.map((node) =>
-                node.id === params.target
-                  ? { ...node, data: { ...node.data, ...dataToPropagate } }
-                  : node
-              )
-            );
-          }
-        }
-      }
     },
-    [setEdges, nodes, setNodes]
+    [setEdges]
   );
 
   const updateNodeData = useCallback(
     (nodeId: string, data: Record<string, unknown>) => {
-      setNodes((nds) =>
-        nds.map((node) =>
+      setNodes((nds) => {
+        const updated = nds.map((node) =>
           node.id === nodeId ? { ...node, data: { ...node.data, ...data } } : node
-        )
-      );
+        );
+        // Sync ref immediately so onConnect can see latest data
+        nodesRef.current = updated;
+        return updated;
+      });
     },
     [setNodes]
   );
 
   const propagateData = useCallback(
     (sourceId: string, value: string | Record<string, unknown>) => {
-      const outgoingEdges = edges.filter((e) => e.source === sourceId);
-      if (outgoingEdges.length > 1) {
-        console.log(`Multi-output: Propagating data from ${sourceId} to ${outgoingEdges.length} targets:`, outgoingEdges.map(e => e.target));
-      }
+      // Use ref to always get current edges (avoids stale closure issue)
+      const currentEdges = edgesRef.current;
+      const outgoingEdges = currentEdges.filter((e) => e.source === sourceId);
       for (const edge of outgoingEdges) {
         // If value is an object, spread it onto the target node
         // If it's a string, set it as inputValue
@@ -381,21 +461,20 @@ export default function FlowEditor() {
         }
       }
     },
-    [edges, updateNodeData]
+    [updateNodeData]
   );
 
   const propagateOutput = useCallback(
     (sourceId: string, imageUrl: string, prompt: string) => {
-      const outgoingEdges = edges.filter((e) => e.source === sourceId);
-      if (outgoingEdges.length > 1) {
-        console.log(`Multi-output: Propagating output from ${sourceId} to ${outgoingEdges.length} targets:`, outgoingEdges.map(e => e.target));
-      }
+      // Use ref to always get current edges (avoids stale closure issue)
+      const currentEdges = edgesRef.current;
+      const outgoingEdges = currentEdges.filter((e) => e.source === sourceId);
       for (const edge of outgoingEdges) {
         // Set both imageUrl/prompt for output nodes AND inputValue for chaining to other operations
         updateNodeData(edge.target, { imageUrl, prompt, inputValue: prompt });
       }
     },
-    [edges, updateNodeData]
+    [updateNodeData]
   );
 
   const onDragStart = (event: React.DragEvent, nodeType: string) => {
@@ -454,7 +533,15 @@ export default function FlowEditor() {
       const type = event.dataTransfer.getData("application/reactflow");
       if (!type) return;
 
-      const position = { x: event.clientX - 280, y: event.clientY - 100 };
+      // Convert screen coordinates to flow coordinates (accounts for zoom/pan)
+      let position = { x: 50, y: 150 }; // Default: left-middle of canvas
+      if (reactFlowInstance.current) {
+        position = reactFlowInstance.current.screenToFlowPosition({
+          x: event.clientX,
+          y: event.clientY,
+        });
+      }
+
       const newNode: Node = {
         id: `${type}-${nodeIdCounter.current++}`,
         type,
@@ -794,8 +881,13 @@ export default function FlowEditor() {
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
+          onInit={(instance) => {
+            reactFlowInstance.current = instance as unknown as typeof reactFlowInstance.current;
+          }}
           nodeTypes={nodeTypes}
-          fitView
+          defaultViewport={{ x: 0, y: 0, zoom: 1 }}
+          minZoom={0.3}
+          maxZoom={1.5}
           deleteKeyCode={["Delete", "Backspace"]}
           style={{ background: "#fafafa" }}
           defaultEdgeOptions={{

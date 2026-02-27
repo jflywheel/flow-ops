@@ -1,6 +1,7 @@
 import { Handle, Position } from "@xyflow/react";
 import { useState } from "react";
 import { generateCopy } from "../../api";
+import ContentModal from "../ContentModal";
 
 interface CopyVariant {
   headline: string;
@@ -37,6 +38,7 @@ export default function GenerateCopyNode({ id, data }: GenerateCopyNodeProps) {
   const [showOptions, setShowOptions] = useState(false);
   const [platform, setPlatform] = useState<"google" | "meta">("google");
   const [mode, setMode] = useState<"report" | "newsletter">("report");
+  const [modalOpen, setModalOpen] = useState(false);
 
   const report = data.report;
 
@@ -259,6 +261,7 @@ export default function GenerateCopyNode({ id, data }: GenerateCopyNodeProps) {
 
       {copy && !loading && (
         <div
+          onClick={() => setModalOpen(true)}
           style={{
             marginTop: "10px",
             padding: "8px 10px",
@@ -267,11 +270,23 @@ export default function GenerateCopyNode({ id, data }: GenerateCopyNodeProps) {
             fontSize: "11px",
             color: "#9d174d",
             lineHeight: "1.4",
+            cursor: "pointer",
           }}
+          title="Click to expand"
         >
           {headlineCount} headline variants generated
+          <div style={{ fontSize: "10px", color: "#ec4899", marginTop: "4px" }}>
+            Click to expand
+          </div>
         </div>
       )}
+
+      <ContentModal
+        isOpen={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title="Generated Copy"
+        content={copy || {}}
+      />
 
       <Handle
         type="source"

@@ -1,6 +1,7 @@
 import { Handle, Position } from "@xyflow/react";
 import { useState } from "react";
 import { enhanceText } from "../../api";
+import ContentModal from "../ContentModal";
 
 interface EnhanceTextNodeProps {
   id: string;
@@ -18,6 +19,7 @@ export default function EnhanceTextNode({ id, data }: EnhanceTextNodeProps) {
   const [output, setOutput] = useState(data.outputValue || "");
   const [showOptions, setShowOptions] = useState(false);
   const [extraInstructions, setExtraInstructions] = useState("");
+  const [modalOpen, setModalOpen] = useState(false);
 
   const inputValue = data.inputValue || "";
 
@@ -196,6 +198,7 @@ export default function EnhanceTextNode({ id, data }: EnhanceTextNodeProps) {
 
       {output && !loading && (
         <div
+          onClick={() => setModalOpen(true)}
           style={{
             marginTop: "10px",
             padding: "8px 10px",
@@ -206,12 +209,23 @@ export default function EnhanceTextNode({ id, data }: EnhanceTextNodeProps) {
             lineHeight: "1.4",
             maxHeight: "60px",
             overflow: "hidden",
+            cursor: "pointer",
           }}
         >
           {output.slice(0, 100)}
           {output.length > 100 && "..."}
+          <div style={{ fontSize: "10px", color: "#f59e0b", marginTop: "4px" }}>
+            Click to expand
+          </div>
         </div>
       )}
+
+      <ContentModal
+        isOpen={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title="Enhanced Text"
+        content={output}
+      />
 
       <Handle
         type="source"

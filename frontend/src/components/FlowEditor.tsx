@@ -285,11 +285,34 @@ const utilities = [
   { type: "platformToggle", label: "Platform", icon: "P", gradient: "linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%)" },
 ];
 
+// localStorage keys
+const STORAGE_KEY_NODES = "flow-ops-nodes";
+const STORAGE_KEY_EDGES = "flow-ops-edges";
+const STORAGE_KEY_COUNTER = "flow-ops-counter";
+
+// Load initial state from localStorage
+function loadFromStorage(): { nodes: Node[]; edges: Edge[]; counter: number } {
+  try {
+    const nodesJson = localStorage.getItem(STORAGE_KEY_NODES);
+    const edgesJson = localStorage.getItem(STORAGE_KEY_EDGES);
+    const counterStr = localStorage.getItem(STORAGE_KEY_COUNTER);
+
+    return {
+      nodes: nodesJson ? JSON.parse(nodesJson) : [],
+      edges: edgesJson ? JSON.parse(edgesJson) : [],
+      counter: counterStr ? parseInt(counterStr, 10) : 1,
+    };
+  } catch {
+    return { nodes: [], edges: [], counter: 1 };
+  }
+}
+
 export default function FlowEditor() {
-  // Start with empty canvas
-  const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
-  const nodeIdCounter = useRef(1);
+  // Load initial state from localStorage
+  const initialState = useRef(loadFromStorage());
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node>(initialState.current.nodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initialState.current.edges);
+  const nodeIdCounter = useRef(initialState.current.counter);
   // Store ReactFlow instance for coordinate conversion and fitView
   const reactFlowInstance = useRef<{
     screenToFlowPosition: (pos: { x: number; y: number }) => { x: number; y: number };
@@ -297,6 +320,42 @@ export default function FlowEditor() {
   } | null>(null);
   // Track when we need to fitView (after loading a preset)
   const shouldFitView = useRef(false);
+
+  // Save to localStorage when nodes/edges change (debounced)
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    // Debounce saves to avoid excessive writes
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+    saveTimeoutRef.current = setTimeout(() => {
+      try {
+        localStorage.setItem(STORAGE_KEY_NODES, JSON.stringify(nodes));
+        localStorage.setItem(STORAGE_KEY_EDGES, JSON.stringify(edges));
+        localStorage.setItem(STORAGE_KEY_COUNTER, String(nodeIdCounter.current));
+      } catch (e) {
+        console.error("Failed to save to localStorage:", e);
+      }
+    }, 500);
+
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+    };
+  }, [nodes, edges]);
+
+  // Clear canvas function
+  const clearCanvas = () => {
+    if (nodes.length === 0 || confirm("Clear all nodes and connections?")) {
+      setNodes([]);
+      setEdges([]);
+      nodeIdCounter.current = 1;
+      localStorage.removeItem(STORAGE_KEY_NODES);
+      localStorage.removeItem(STORAGE_KEY_EDGES);
+      localStorage.removeItem(STORAGE_KEY_COUNTER);
+    }
+  };
 
   // Keep refs to current nodes/edges to avoid stale closures in callbacks
   const nodesRef = useRef(nodes);
@@ -574,18 +633,45 @@ export default function FlowEditor() {
           overflowY: "auto",
         }}
       >
-        <div style={{ marginBottom: "32px" }}>
-          <h1
-            style={{
-              fontSize: "20px",
-              fontWeight: 600,
-              letterSpacing: "-0.3px",
-              marginBottom: "4px",
-            }}
-          >
-            flow-ops
-          </h1>
-          <p style={{ fontSize: "13px", color: "#86868b" }}>
+        <div style={{ marginBottom: "24px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "4px" }}>
+            <h1
+              style={{
+                fontSize: "20px",
+                fontWeight: 600,
+                letterSpacing: "-0.3px",
+                margin: 0,
+              }}
+            >
+              flow-ops
+            </h1>
+            {nodes.length > 0 && (
+              <button
+                onClick={clearCanvas}
+                style={{
+                  padding: "4px 10px",
+                  borderRadius: "6px",
+                  border: "1px solid #e5e5e5",
+                  background: "#fff",
+                  color: "#86868b",
+                  fontSize: "11px",
+                  cursor: "pointer",
+                  transition: "all 0.15s",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = "#ff3b30";
+                  e.currentTarget.style.color = "#ff3b30";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = "#e5e5e5";
+                  e.currentTarget.style.color = "#86868b";
+                }}
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          <p style={{ fontSize: "13px", color: "#86868b", margin: 0 }}>
             Drag nodes to build
           </p>
         </div>

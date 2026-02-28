@@ -93,6 +93,17 @@ Podcast RSS → Transcribe → YT Thumbnails → 5 downloadable images
 - Reference image passed directly to Gemini (not described first)
 - Person rendered photorealistically, not cartoonish
 
+## Node Isolation Rule
+
+**When fixing or changing a node, only modify that node's file.** Do not change other nodes, FlowEditor's data propagation, or api.ts unless explicitly asked.
+
+Each node has a clear contract:
+- **Inputs**: What it expects via `data.inputValue` (or other data props)
+- **Outputs**: What it sets on its own data (e.g. `summary`, `transcript`, `imageUrl`, `report`)
+- **API call**: Which `api.ts` function it calls and what shape it expects back
+
+If a node is broken, fix it within its own file. If you think the problem is in another node or in the propagation logic, say so and ask before touching it. Changing other nodes to fix one problem creates cascading issues. The self-test runner verifies each API independently and chains them together, so regressions get caught.
+
 ## Development Patterns
 
 ### Parsing JSON from LLM Responses
@@ -192,6 +203,19 @@ When adding a new `/api/operations/*` endpoint:
 3. Use the robust JSON parsing pattern above for LLM responses
 4. Log errors with `console.error` before returning error responses
 5. Add the endpoint to this doc and to api.ts
+
+## LLM API Integration
+- Always verify model IDs against the provider's current API docs before using them. Do NOT assume model IDs like 'sonnet' or old Gemini model strings are valid.
+- When calling image/content generation APIs, pass binary data or URLs directly. Never describe an image to the model as a substitute for passing it.
+- When parsing LLM responses, always strip markdown code block wrappers (```json ... ```) before JSON.parse(). This is the most common failure mode in our pipeline nodes.
+
+## Data & Query Accuracy
+- When querying data (D1, R2, KV), always verify the query logic matches the SPECIFIC entity requested, not just any entity from the same provider/category.
+- When reporting numbers from data queries, double-check recency and accuracy before presenting. User relies on these numbers for business decisions.
+
+## Session Continuity
+- This project uses a PLAN.md file for multi-session work. Always read PLAN.md at the start of a session when the user says 'continue'.
+- After completing a planned session, update PLAN.md with progress and mark completed items.
 
 ## Next Up
 See FWP-PROMPT-REFERENCE.md for the full ad generation pipeline prompts to integrate as new operations.

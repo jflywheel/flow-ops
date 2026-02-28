@@ -227,19 +227,6 @@ export async function generatePhoto(
   return res.json();
 }
 
-// Enhance/rewrite text
-export async function enhanceText(text: string, style?: string): Promise<string> {
-  const res = await apiPost("/operations/enhance-text", { text, style });
-
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error || "Failed to enhance text");
-  }
-
-  const data = await res.json();
-  return data.result;
-}
-
 // Add text overlay to image
 export async function addTextOverlay(
   imageUrl: string,
@@ -446,30 +433,6 @@ export async function fetchPodcastRSS(feedUrl: string): Promise<{
   if (!res.ok) {
     const err = await res.json();
     throw new Error(err.error || "Failed to parse RSS feed");
-  }
-
-  return res.json();
-}
-
-// Fetch stock info by ticker symbol
-export async function fetchStockInfo(ticker: string): Promise<{
-  ticker: string;
-  name: string;
-  price: number;
-  change: number;
-  changePercent: number;
-  fundamentals: {
-    marketCap?: string;
-    peRatio?: number;
-    dividend?: number;
-    volume?: string;
-  };
-}> {
-  const res = await apiPost("/operations/stock-info", { ticker });
-
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error || "Failed to fetch stock info");
   }
 
   return res.json();

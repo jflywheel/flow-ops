@@ -18,8 +18,15 @@ interface PodcastRSSNodeProps {
   };
 }
 
+// Preset podcast feeds
+const PRESET_FEEDS = [
+  { name: "AI Investor Podcast", url: "https://rss.buzzsprout.com/2400102.rss" },
+  { name: "Custom URL", url: "" },
+];
+
 export default function PodcastRSSNode({ id, data }: PodcastRSSNodeProps) {
-  const [feedUrl, setFeedUrl] = useState("");
+  const [selectedPreset, setSelectedPreset] = useState(0); // Default to AI Investor
+  const [feedUrl, setFeedUrl] = useState(PRESET_FEEDS[0].url);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [episodes, setEpisodes] = useState<Episode[]>([]);
@@ -101,12 +108,14 @@ export default function PodcastRSSNode({ id, data }: PodcastRSSNodeProps) {
         </span>
       </div>
 
-      <input
-        type="text"
-        value={feedUrl}
-        onChange={(e) => setFeedUrl(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && handleLoadFeed()}
-        placeholder="RSS feed URL..."
+      {/* Preset dropdown */}
+      <select
+        value={selectedPreset}
+        onChange={(e) => {
+          const idx = Number(e.target.value);
+          setSelectedPreset(idx);
+          setFeedUrl(PRESET_FEEDS[idx].url);
+        }}
         style={{
           width: "100%",
           padding: "10px 12px",
@@ -116,8 +125,36 @@ export default function PodcastRSSNode({ id, data }: PodcastRSSNodeProps) {
           marginBottom: "8px",
           fontFamily: "inherit",
           boxSizing: "border-box",
+          background: "#fff",
         }}
-      />
+      >
+        {PRESET_FEEDS.map((feed, idx) => (
+          <option key={idx} value={idx}>
+            {feed.name}
+          </option>
+        ))}
+      </select>
+
+      {/* Custom URL input - only show when Custom is selected */}
+      {selectedPreset === PRESET_FEEDS.length - 1 && (
+        <input
+          type="text"
+          value={feedUrl}
+          onChange={(e) => setFeedUrl(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleLoadFeed()}
+          placeholder="Enter RSS feed URL..."
+          style={{
+            width: "100%",
+            padding: "10px 12px",
+            borderRadius: "10px",
+            border: "1px solid #e5e5e5",
+            fontSize: "12px",
+            marginBottom: "8px",
+            fontFamily: "inherit",
+            boxSizing: "border-box",
+          }}
+        />
+      )}
 
       <button
         onClick={handleLoadFeed}

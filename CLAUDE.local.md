@@ -19,17 +19,30 @@ Built with React Flow, hosted on Cloudflare.
 ### Source Nodes
 - **Text Input** - Textarea for entering/pasting text
 - **URL Input** - Fetches URL, extracts article text via Gemini (optional instructions)
+- **Podcast RSS** - Parses RSS feed, select episode, outputs audio URL
+  - Preset: AI Investor Podcast (default), or custom URL
+- **Transcribe** - AssemblyAI transcription with speaker diarization and optional speaker identification
 
 ### Operation Nodes
 - **iPhone Photo** - Generates photorealistic image from text using Gemini image models
-  - Models: Gemini 2.5 Flash Image, Gemini 3 Pro Image
+  - Models: Gemini 2.5 Flash Image, Gemini 3 Pro Image, Gemini 3.1 Flash Image
   - Options: extra instructions, reference image URL, format (square/landscape/portrait)
+- **YT Thumbnails** - Generates 5 YouTube thumbnail images from transcript + reference photo
+  - Analyzes transcript for specific tech/topics mentioned
+  - Passes reference image directly to Gemini for photorealistic person rendering
+  - Models: Gemini 3.1 Flash (default), Gemini 3 Pro, Gemini 2.5 Flash
+  - Default reference image: AI Investor Podcast host photo
+  - Outputs: 5 thumbnail images (16:9) with overlay text suggestions and download buttons
+- **Meta Headlines** - Generates Meta ad copy (5 primary texts ≤125 chars, 5 headlines ≤255 chars)
+  - Custom modal with individual copy buttons for each item
 - **Animate** - Converts image to video using Veo
   - Models: Veo 2.0, Veo 3.1 Fast, Veo 3.1 Standard
   - Options: prompt, aspect ratio, duration
 - **Crop** - Client-side crop for aspect ratios (4:5, 1:1, 16:9, 9:16)
 - **Text Overlay** - Adds text on images (not fully implemented)
 - **Enhance Text** - Rewrites text (backend exists)
+- **Summarize** - Summarizes text to specified length
+- **Extract Key Points** - Extracts bullet points from text
 
 ### Output Nodes
 - **Output** - Displays final result (image or video)
@@ -45,18 +58,40 @@ Hardcoded presets (not user-saved), starts with blank canvas:
 ## API Endpoints
 
 ```
-POST /api/login                    - dog/dog auth, returns JWT
-GET  /api/me                       - check auth
-POST /api/operations/iphone-photo  - Gemini image generation
-POST /api/operations/animate       - Veo video generation (async polling)
-POST /api/operations/enhance-text  - Text rewriting
-POST /api/operations/text-overlay  - Image text overlay
-POST /api/operations/fetch-url     - URL fetch + article extraction
+POST /api/login                           - dog/dog auth, returns JWT
+GET  /api/me                              - check auth
+POST /api/operations/iphone-photo         - Gemini image generation
+POST /api/operations/animate              - Veo video generation (async polling)
+POST /api/operations/enhance-text         - Text rewriting
+POST /api/operations/text-overlay         - Image text overlay
+POST /api/operations/fetch-url            - URL fetch + article extraction
+POST /api/operations/transcribe           - AssemblyAI transcription
+POST /api/operations/podcast-rss          - Parse podcast RSS feed
+POST /api/operations/summarize            - Summarize text
+POST /api/operations/extract-key-points   - Extract bullet points
+POST /api/operations/generate-meta-headlines    - Meta ad copy (primary texts + headlines)
+POST /api/operations/generate-youtube-thumbnails - Generate 5 thumbnail images from transcript + reference
 ```
 
 ## Deployment
 - Worker: `wrangler deploy` from root
 - Frontend: `cd frontend && npm run build && wrangler pages deploy dist`
+
+## State Persistence
+- Flow state (nodes, edges, node data) persists to localStorage
+- Auto-saves on changes (debounced 500ms)
+- Loads on page refresh
+- Clear button to reset canvas
+
+## YouTube Thumbnails Workflow
+```
+Podcast RSS → Transcribe → YT Thumbnails → 5 downloadable images
+```
+- Default podcast: AI Investor Podcast RSS feed
+- Default reference image: Host photo from Squarespace
+- Generates 5 thumbnails based on specific tech/topics from transcript
+- Reference image passed directly to Gemini (not described first)
+- Person rendered photorealistically, not cartoonish
 
 ## Development Patterns
 

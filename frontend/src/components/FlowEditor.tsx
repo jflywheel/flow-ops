@@ -51,6 +51,7 @@ import GenerateVisualConceptsNode from "./nodes/GenerateVisualConceptsNode";
 import SummarizeNode from "./nodes/SummarizeNode";
 import ExtractKeyPointsNode from "./nodes/ExtractKeyPointsNode";
 import GenerateMetaHeadlinesNode from "./nodes/GenerateMetaHeadlinesNode";
+import GenerateYouTubeThumbnailsNode from "./nodes/GenerateYouTubeThumbnailsNode";
 
 // Output nodes
 import ImageOutputNode from "./nodes/ImageOutputNode";
@@ -95,6 +96,7 @@ const nodeTypes: Record<string, any> = {
   summarize: SummarizeNode,
   extractKeyPoints: ExtractKeyPointsNode,
   generateMetaHeadlines: GenerateMetaHeadlinesNode,
+  generateYouTubeThumbnails: GenerateYouTubeThumbnailsNode,
   // Outputs
   imageOutput: ImageOutputNode,
   reportPreview: ReportPreviewNode,
@@ -263,6 +265,7 @@ const operations = [
   { type: "generateAdvertorial", label: "Advertorial", icon: "A", gradient: "linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%)" },
   { type: "generateAdvertorialCopy", label: "Advertorial Copy", icon: "C", gradient: "linear-gradient(135deg, #ec4899 0%, #f43f5e 100%)" },
   { type: "generateMetaHeadlines", label: "Meta Headlines", icon: "M", gradient: "linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)" },
+  { type: "generateYouTubeThumbnails", label: "YT Thumbnails", icon: "▶", gradient: "linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)" },
   // Image generation
   { type: "generateVisualConcepts", label: "Visual Concepts", icon: "V", gradient: "linear-gradient(135deg, #14b8a6 0%, #0d9488 100%)" },
   { type: "iphonePhoto", label: "Generate Image", icon: "I", gradient: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)" },

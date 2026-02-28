@@ -507,3 +507,36 @@ export async function generateMetaHeadlines(text: string): Promise<{
 
   return res.json();
 }
+
+// Generate YouTube thumbnails with actual images from transcript/text + reference photo
+export async function generateYouTubeThumbnails(
+  text: string,
+  referenceImageUrl?: string,
+  episodeTitle?: string,
+  model?: string // gemini-3.1-flash (default), gemini-pro, gemini-flash
+): Promise<{
+  thumbnails: Array<{
+    specific_topic: string;
+    overlay_text: string;
+    hook_angle: string;
+    imageUrl: string;
+  }>;
+}> {
+  const token = getToken();
+
+  const res = await fetch(`${API_BASE}/operations/generate-youtube-thumbnails`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ text, referenceImageUrl, episodeTitle, model }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to generate thumbnails");
+  }
+
+  return res.json();
+}

@@ -2383,6 +2383,283 @@ IMPORTANT: Count characters carefully. Primary texts must be ≤125 chars. Headl
         }
       }
 
+      // Generate YouTube Thumbnails - generates actual images from transcript + reference photo
+      if (path === "/api/operations/generate-youtube-thumbnails" && request.method === "POST") {
+        const body = await request.json() as {
+          text?: string;
+          referenceImageUrl?: string;
+          episodeTitle?: string;
+          model?: string; // gemini-3.1-flash (default), gemini-pro, gemini-flash
+        };
+
+        if (!body.text) {
+          return Response.json(
+            { error: "Missing text field", code: "MISSING_TEXT" },
+            { status: 400, headers: corsHeaders }
+          );
+        }
+
+        const anthropicKey = await env.FWP_ANTHROPIC_API_KEY.get();
+        const geminiKey = await env.FWP_GEMINI_API_KEY.get();
+
+        // Step 1: If reference image provided, fetch and convert to base64 for direct use
+        let referenceImageBase64 = "";
+        let referenceImageMimeType = "image/jpeg";
+
+        if (body.referenceImageUrl) {
+          if (body.referenceImageUrl.startsWith("data:")) {
+            const mimeMatch = body.referenceImageUrl.match(/^data:([^;]+);base64,/);
+            if (mimeMatch) {
+              referenceImageMimeType = mimeMatch[1];
+            }
+            referenceImageBase64 = body.referenceImageUrl.split(",")[1];
+          } else if (body.referenceImageUrl.startsWith("http")) {
+            console.log("Fetching reference image from:", body.referenceImageUrl);
+            try {
+              const imgResponse = await fetch(body.referenceImageUrl);
+              if (imgResponse.ok) {
+                const contentType = imgResponse.headers.get("content-type") || "image/jpeg";
+                referenceImageMimeType = contentType.split(";")[0];
+                const arrayBuffer = await imgResponse.arrayBuffer();
+                const uint8Array = new Uint8Array(arrayBuffer);
+                let binary = "";
+                for (let i = 0; i < uint8Array.length; i++) {
+                  binary += String.fromCharCode(uint8Array[i]);
+                }
+                referenceImageBase64 = btoa(binary);
+                console.log("Fetched reference image, size:", uint8Array.length, "mime:", referenceImageMimeType);
+              } else {
+                console.error("Failed to fetch reference image:", imgResponse.status);
+              }
+            } catch (err) {
+              console.error("Error fetching reference image:", err);
+            }
+          }
+        }
+
+        // Step 2: Analyze transcript and generate thumbnail concepts with specific tech/topics
+        const contentPreview = body.text.slice(0, 10000);
+        const episodeContext = body.episodeTitle ? `\nEPISODE TITLE: ${body.episodeTitle}` : "";
+        const hasReferenceImage = !!referenceImageBase64;
+
+        const referenceImageNote = hasReferenceImage
+          ? `\n\nIMPORTANT: A reference photo of the host will be provided. The generated image should feature THIS EXACT PERSON from the reference photo, placed in the scene you describe.`
+          : "";
+
+        const conceptPrompt = `You are a YouTube thumbnail strategist. Analyze this podcast transcript and create 5 thumbnail concepts.
+${episodeContext}
+
+TRANSCRIPT:
+${contentPreview}
+${referenceImageNote}
+
+YOUR TASK:
+1. Identify the 5 most interesting/clickable SPECIFIC technologies, products, concepts, or topics mentioned in the transcript.
+2. For each, create a thumbnail concept showing the host interacting with that specific thing.
+
+CRITICAL RULES:
+- Each thumbnail must feature a SPECIFIC technology, product, or concept from the transcript (not generic "tech" or "innovation")
+- The host should be interacting with, standing near, or reacting to the specific tech
+- Use dramatic lighting and high contrast backgrounds
+- Describe the scene, background, and how the tech appears - the reference photo will provide the person
+
+For each concept provide:
+1. specific_topic: The exact technology/product/concept from the transcript (be specific - not "AI" but "GPT-4 Turbo" or "Tesla's Optimus robot")
+2. image_prompt: A detailed prompt describing the scene. Focus on: the specific tech/product being featured, the background/setting, lighting, mood, and how the person should be posed/interacting with the tech. DO NOT describe the person's appearance - the reference image provides that.
+3. overlay_text: 3-5 words for the thumbnail text overlay
+4. hook_angle: curiosity, fear, greed, controversy, etc.
+
+Respond in JSON:
+{
+  "concepts": [
+    {
+      "specific_topic": "...",
+      "image_prompt": "...",
+      "overlay_text": "...",
+      "hook_angle": "..."
+    }
+  ]
+}`;
+
+        const anthropicResponse = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "x-api-key": anthropicKey,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "claude-3-haiku-20240307",
+            max_tokens: 4000,
+            messages: [{ role: "user", content: conceptPrompt }],
+          }),
+        });
+
+        if (!anthropicResponse.ok) {
+          const errorText = await anthropicResponse.text();
+          console.error("Anthropic API error:", errorText);
+          return Response.json(
+            { error: "Failed to generate concepts", code: "ANTHROPIC_ERROR" },
+            { status: 500, headers: corsHeaders }
+          );
+        }
+
+        const anthropicData = await anthropicResponse.json() as {
+          content?: Array<{ type: string; text?: string }>;
+        };
+
+        const responseText = anthropicData.content?.[0]?.text || "";
+
+        // Parse JSON from response
+        let jsonStr = responseText;
+        const codeBlockMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
+        if (codeBlockMatch) {
+          jsonStr = codeBlockMatch[1].trim();
+        }
+        const jsonObjMatch = jsonStr.match(/\{[\s\S]*\}/);
+        if (jsonObjMatch) {
+          jsonStr = jsonObjMatch[0];
+        }
+
+        let concepts: Array<{
+          specific_topic: string;
+          image_prompt: string;
+          overlay_text: string;
+          hook_angle: string;
+        }>;
+
+        try {
+          const parsed = JSON.parse(jsonStr);
+          concepts = parsed.concepts || [];
+        } catch {
+          console.error("Failed to parse concepts JSON:", responseText.slice(0, 500));
+          return Response.json(
+            { error: "Failed to parse concepts", code: "PARSE_ERROR" },
+            { status: 500, headers: corsHeaders }
+          );
+        }
+
+        // Step 3: Generate images for each concept
+        const thumbnails: Array<{
+          specific_topic: string;
+          overlay_text: string;
+          hook_angle: string;
+          imageUrl: string;
+        }> = [];
+
+        for (const concept of concepts.slice(0, 5)) {
+          try {
+            // Add YouTube thumbnail-specific styling to the prompt
+            const enhancedPrompt = hasReferenceImage
+              ? `Using the provided reference photo of the person, create a YouTube thumbnail where this EXACT person appears in the following scene:
+
+${concept.image_prompt}
+
+CRITICAL REQUIREMENTS:
+- The person must look EXACTLY like the reference photo - same face, same features, completely photorealistic
+- The person must NOT look like a cartoon, illustration, or have any AI/synthetic appearance
+- The person should look like a real photograph of a real human
+- Dramatic lighting and high contrast for the scene, but the person remains photorealistic
+
+Style: Professional YouTube thumbnail, dramatic lighting, high contrast, vibrant colors, 16:9 aspect ratio. The PERSON must be photorealistic like the reference photo.`
+              : `YouTube thumbnail style, photorealistic, dramatic lighting, high contrast, bold colors, 16:9 aspect ratio:
+
+${concept.image_prompt}
+
+Style: Professional YouTube thumbnail, eye-catching, vibrant colors that pop, cinematic lighting, shallow depth of field on the main subject.`;
+
+            // Select Gemini image model
+            let geminiImageModel: string;
+            const selectedModel = body.model || "gemini-3.1-flash";
+            if (selectedModel === "gemini-pro") {
+              geminiImageModel = "gemini-3-pro-image-preview";
+            } else if (selectedModel === "gemini-3.1-flash") {
+              geminiImageModel = "gemini-3.1-flash-image-preview";
+            } else {
+              geminiImageModel = "gemini-2.5-flash-image";
+            }
+
+            console.log("Generating thumbnail for:", concept.specific_topic, "with model:", geminiImageModel, "hasReference:", hasReferenceImage);
+
+            // Build the parts array - include reference image if available
+            const contentParts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [];
+
+            // Add reference image first if available
+            if (hasReferenceImage) {
+              contentParts.push({
+                inlineData: {
+                  mimeType: referenceImageMimeType,
+                  data: referenceImageBase64
+                }
+              });
+            }
+
+            // Add the text prompt
+            contentParts.push({ text: enhancedPrompt });
+
+            const imageResponse = await fetch(
+              `https://generativelanguage.googleapis.com/v1beta/models/${geminiImageModel}:generateContent`,
+              {
+                method: "POST",
+                headers: {
+                  "x-goog-api-key": geminiKey,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                  contents: [{ parts: contentParts }],
+                  generationConfig: {
+                    responseModalities: ["IMAGE"],
+                    imageConfig: {
+                      aspectRatio: "16:9",
+                    },
+                  },
+                }),
+              }
+            );
+
+            if (!imageResponse.ok) {
+              const errorText = await imageResponse.text();
+              console.error("Image generation failed for concept:", concept.specific_topic, errorText);
+              // Continue with other concepts even if one fails
+              continue;
+            }
+
+            const imageData = await imageResponse.json() as {
+              candidates?: Array<{
+                content?: {
+                  parts?: Array<{
+                    inlineData?: { mimeType?: string; data?: string };
+                    inline_data?: { mime_type?: string; data?: string };
+                  }>;
+                };
+              }>;
+            };
+
+            const parts = imageData.candidates?.[0]?.content?.parts || [];
+            const imagePart = parts.find(p => p.inlineData || p.inline_data);
+            const inlineData = (imagePart?.inlineData || imagePart?.inline_data) as { mimeType?: string; mime_type?: string; data?: string } | undefined;
+            const b64 = inlineData?.data;
+            const imgMimeType = inlineData?.mimeType || inlineData?.mime_type || "image/png";
+
+            if (b64) {
+              thumbnails.push({
+                specific_topic: concept.specific_topic,
+                overlay_text: concept.overlay_text,
+                hook_angle: concept.hook_angle,
+                imageUrl: `data:${imgMimeType};base64,${b64}`,
+              });
+            }
+          } catch (err) {
+            console.error("Error generating image:", err);
+            // Continue with other concepts
+          }
+        }
+
+        return Response.json({
+          thumbnails
+        }, { headers: corsHeaders });
+      }
+
       // Summarize operation - uses Gemini Flash (cheap, fast)
       if (path === "/api/operations/summarize" && request.method === "POST") {
         const body = await request.json() as { text?: string; maxLength?: number };

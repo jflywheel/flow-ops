@@ -772,60 +772,6 @@ ${truncatedText}`;
         return Response.json({ text: articleText }, { headers: corsHeaders });
       }
 
-      // Text enhance operation - rewrites/improves text using Gemini
-      if (path === "/api/operations/enhance-text" && request.method === "POST") {
-        const body = await request.json() as { text?: string; style?: string };
-
-        if (!body.text) {
-          return Response.json(
-            { error: "Missing text field", code: "MISSING_TEXT" },
-            { status: 400, headers: corsHeaders }
-          );
-        }
-
-        const geminiKey = await env.FWP_GEMINI_API_KEY.get();
-        const extraInstructions = body.style || "";
-
-        const extraPart = extraInstructions
-          ? `\n\nAdditional instructions: ${extraInstructions}`
-          : "";
-
-        const systemPrompt = `You are a creative writing assistant. Take the user's text and enhance it to be more vivid and detailed. Keep the core meaning but make it more evocative and interesting. Output only the enhanced text, no explanations.${extraPart}`;
-
-        const geminiResponse = await fetch(
-          "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
-          {
-            method: "POST",
-            headers: {
-              "x-goog-api-key": geminiKey,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: `${systemPrompt}\n\nOriginal text: ${body.text}` }] }],
-            }),
-          }
-        );
-
-        if (!geminiResponse.ok) {
-          const errorText = await geminiResponse.text();
-          console.error("Gemini API error:", errorText);
-          return Response.json(
-            { error: "Failed to enhance text", code: "GEMINI_ERROR" },
-            { status: 500, headers: corsHeaders }
-          );
-        }
-
-        const geminiData = await geminiResponse.json() as {
-          candidates?: Array<{
-            content?: { parts?: Array<{ text?: string }> };
-          }>;
-        };
-
-        const result = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "";
-
-        return Response.json({ result }, { headers: corsHeaders });
-      }
-
       // Transcribe operation - transcribes audio using AssemblyAI
       if (path === "/api/operations/transcribe" && request.method === "POST") {
         const body = await request.json() as {
@@ -3016,55 +2962,6 @@ Respond in this exact JSON format:
         return Response.json({ feedTitle, episodes }, { headers: corsHeaders });
       }
 
-      // Stock lookup operation - returns mock data (real API would need finance API key)
-      if (path === "/api/operations/stock-lookup" && request.method === "POST") {
-        const body = await request.json() as { ticker?: string };
-
-        if (!body.ticker) {
-          return Response.json(
-            { error: "Missing ticker field", code: "MISSING_TICKER" },
-            { status: 400, headers: corsHeaders }
-          );
-        }
-
-        const ticker = body.ticker.toUpperCase();
-
-        // Mock data for common tickers (in production, call a finance API)
-        const mockStocks: Record<string, { name: string; price: number; change: number; marketCap: string }> = {
-          "AAPL": { name: "Apple Inc.", price: 178.52, change: 1.23, marketCap: "2.8T" },
-          "MSFT": { name: "Microsoft Corporation", price: 378.91, change: 2.45, marketCap: "2.8T" },
-          "GOOGL": { name: "Alphabet Inc.", price: 141.80, change: -0.87, marketCap: "1.7T" },
-          "AMZN": { name: "Amazon.com, Inc.", price: 178.25, change: 3.12, marketCap: "1.8T" },
-          "NVDA": { name: "NVIDIA Corporation", price: 875.28, change: 15.67, marketCap: "2.2T" },
-          "META": { name: "Meta Platforms, Inc.", price: 485.22, change: 5.43, marketCap: "1.2T" },
-          "TSLA": { name: "Tesla, Inc.", price: 245.67, change: -4.32, marketCap: "780B" },
-          "BRK.B": { name: "Berkshire Hathaway Inc.", price: 412.35, change: 1.87, marketCap: "905B" },
-          "JPM": { name: "JPMorgan Chase & Co.", price: 198.45, change: 2.11, marketCap: "575B" },
-          "V": { name: "Visa Inc.", price: 278.90, change: 1.56, marketCap: "575B" },
-        };
-
-        const stockData = mockStocks[ticker];
-
-        if (stockData) {
-          return Response.json({
-            ticker,
-            name: stockData.name,
-            price: stockData.price,
-            change: stockData.change,
-            marketCap: stockData.marketCap,
-          }, { headers: corsHeaders });
-        }
-
-        // For unknown tickers, return placeholder data
-        return Response.json({
-          ticker,
-          name: `${ticker} Corp.`,
-          price: 100.00,
-          change: 0.00,
-          marketCap: "N/A",
-        }, { headers: corsHeaders });
-      }
-
       // Chat endpoint - natural language to flow actions via Claude
       if (path === "/api/chat" && request.method === "POST") {
         const body = await request.json() as {
@@ -3094,13 +2991,9 @@ Respond in this exact JSON format:
 - audioUpload: Upload audio. Fields: { audioBase64: "", mimeType: "", filename: "" }
 - videoUpload: Upload video. Fields: { videoBase64: "", mimeType: "", filename: "" }
 - pdfUpload: Upload PDF. Fields: { pdfBase64: "", filename: "" }
-- podcastEpisode: Single podcast episode URL. Fields: { audioUrl: "", title: "" }
-- podcastRSS: Podcast RSS feed (parses episodes). Fields: { audioUrl: "", title: "" }
-- stockTicker: Stock market data. Fields: { ticker: "" }
-- reportJSON: Paste raw report JSON. Fields: { report: null }
+- podcastRSS: Podcast (RSS feed or direct episode link). Fields: { feedUrl: "https://..." }
 
 ### Operation Nodes (process data)
-- enhanceText: Rewrites/improves text. Fields: { inputValue: "" }
 - summarize: Summarizes text. Fields: { inputValue: "" }
 - extractKeyPoints: Extracts bullet points. Fields: { inputValue: "" }
 - transcribe: Transcribes audio to text. Fields: { inputValue: "" }
@@ -3156,7 +3049,12 @@ Return ONLY valid JSON (no markdown, no explanation outside the JSON). The forma
 - sourceIndex and targetIndex in connectNodes refer to the 0-based index of addNode actions in the SAME response
 - When adding a chain of nodes, connect them in order
 - If the user asks for a preset by name, use loadPreset instead of manually adding nodes
-- If the user provides text content, put it in the data.value field of a textInput node
+- IMPORTANT: Always fill in the data fields with any content the user provides. Examples:
+  - "transcribe from fool.com" -> urlInput data should be { "value": "https://www.fool.com" }
+  - "summarize this text: hello world" -> textInput data should be { "value": "hello world" }
+  - "generate a photo of a sunset" -> iphonePhoto data should be { "extraInstructions": "a sunset" }, or if standalone, textInput with { "value": "a sunset" }
+  - "podcast from https://feed.example.com/rss" -> podcastRSS data should be { "feedUrl": "https://feed.example.com/rss" }
+- For URLs, always include the full URL with https:// prefix. If user says "fool.com", use "https://www.fool.com"
 - Keep reply short and helpful. Do not use emdashes. Use periods, commas, or colons instead.
 - If you do not understand the request, return an empty actions array and explain in the reply.
 - Always include an output node at the end of a chain when appropriate.`;

@@ -2503,6 +2503,7 @@ ${concept.image_prompt}
 
 CRITICAL REQUIREMENTS:
 - The person must look EXACTLY like the reference photo - same face, same features, completely photorealistic
+- The person's body, arms, hands, and proportions must match their face from the reference photo. If the person has a larger face, their body should be proportionally larger. If leaner, their body should be proportionally leaner. The whole person should look like one consistent real human.
 - The person must NOT look like a cartoon, illustration, or have any AI/synthetic appearance
 - The person should look like a real photograph of a real human
 - Dramatic lighting and high contrast for the scene, but the person remains photorealistic

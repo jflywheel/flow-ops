@@ -1,4 +1,4 @@
-// ChatPanel - floating chat interface for building flows with natural language
+// ChatPanel - persistent bottom bar for building flows with natural language
 // Sends messages to Claude Haiku, which returns actions (add nodes, connect, load presets)
 
 import { useState, useRef, useEffect, useCallback } from "react";
@@ -11,23 +11,33 @@ interface ChatMessage {
 }
 
 interface ChatPanelProps {
-  // Current canvas state
   nodes: Node[];
   edges: Edge[];
-  // Callbacks to manipulate the canvas
-  onAddNode: (nodeType: string, data: Record<string, unknown>) => string; // returns new node id
+  // Batch add: creates multiple nodes at once, laid out left-to-right, returns array of IDs
+  onAddNodes: (
+    nodes: { nodeType: string; data: Record<string, unknown> }[]
+  ) => string[];
   onAddEdge: (sourceId: string, targetId: string) => void;
   onLoadPreset: (presetName: string) => void;
+  onClearCanvas: (skipConfirm?: boolean) => void;
+  darkMode?: boolean;
+  isMobile?: boolean;
 }
 
 export default function ChatPanel({
   nodes,
   edges,
-  onAddNode,
+  onAddNodes,
   onAddEdge,
   onLoadPreset,
+  onClearCanvas,
+  darkMode = false,
+  isMobile = false,
 }: ChatPanelProps) {
-  const [isOpen, setIsOpen] = useState(false);
+  const ct = darkMode
+    ? { bg: "#1a1a1a", border: "#333", inputBg: "#2a2a2a", inputBorder: "#444", text: "#e5e5e5", muted: "#888", msgBg: "#2a2a2a", userBg: "#3b82f6" }
+    : { bg: "#fff", border: "#e5e5e5", inputBg: "#f9f9f9", inputBorder: "#e5e5e5", text: "#1d1d1f", muted: "#86868b", msgBg: "#f5f5f7", userBg: "#1d1d1f" };
+  const [expanded, setExpanded] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -36,62 +46,79 @@ export default function ChatPanel({
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    if (expanded) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages, expanded]);
 
-  // Focus input when panel opens
+  // Focus input on mount and when expanded
   useEffect(() => {
-    if (isOpen) {
+    if (expanded) {
       setTimeout(() => inputRef.current?.focus(), 100);
     }
-  }, [isOpen]);
+  }, [expanded]);
 
   // Execute actions returned by the AI
   const executeActions = useCallback(
     (actions: ChatAction[]) => {
-      // Track node IDs created by addNode actions (for connectNodes references)
-      const createdNodeIds: string[] = [];
+      // Collect all addNode actions first, then batch-create them with proper layout
+      const nodeActions = actions.filter((a) => a.type === "addNode" && a.nodeType);
+      const connectActions = actions.filter((a) => a.type === "connectNodes");
+      const presetActions = actions.filter((a) => a.type === "loadPreset");
 
-      for (const action of actions) {
-        switch (action.type) {
-          case "addNode": {
-            if (action.nodeType) {
-              const nodeId = onAddNode(action.nodeType, action.data || {});
-              createdNodeIds.push(nodeId);
-            }
-            break;
-          }
-          case "connectNodes": {
-            const srcId = createdNodeIds[action.sourceIndex ?? 0];
-            const tgtId = createdNodeIds[action.targetIndex ?? 0];
-            if (srcId && tgtId) {
-              onAddEdge(srcId, tgtId);
-            }
-            break;
-          }
-          case "loadPreset": {
-            if (action.presetName) {
-              onLoadPreset(action.presetName);
-            }
-            break;
-          }
+      // Load presets first (replaces canvas)
+      for (const action of presetActions) {
+        if (action.presetName) {
+          onLoadPreset(action.presetName);
+        }
+      }
+
+      // Batch-add nodes with left-to-right layout
+      let createdNodeIds: string[] = [];
+      if (nodeActions.length > 0) {
+        createdNodeIds = onAddNodes(
+          nodeActions.map((a) => ({
+            nodeType: a.nodeType!,
+            data: a.data || {},
+          }))
+        );
+      }
+
+      // Connect nodes using the indices from the AI response
+      for (const action of connectActions) {
+        const srcId = createdNodeIds[action.sourceIndex ?? 0];
+        const tgtId = createdNodeIds[action.targetIndex ?? 0];
+        if (srcId && tgtId) {
+          onAddEdge(srcId, tgtId);
         }
       }
     },
-    [onAddNode, onAddEdge, onLoadPreset]
+    [onAddNodes, onAddEdge, onLoadPreset]
   );
 
   const handleSend = async () => {
     const trimmed = input.trim();
     if (!trimmed || loading) return;
 
-    // Add user message
+    // Handle "clear" locally without calling the API
+    if (trimmed.toLowerCase() === "clear") {
+      setInput("");
+      onClearCanvas(true);
+      setMessages((prev) => [
+        ...prev,
+        { role: "user", content: trimmed },
+        { role: "assistant", content: "Canvas cleared." },
+      ]);
+      return;
+    }
+
     setMessages((prev) => [...prev, { role: "user", content: trimmed }]);
     setInput("");
     setLoading(true);
+    // Expand to show the response
+    setExpanded(true);
 
     try {
-      // Send to backend with current canvas context
       const response: ChatResponse = await chat(
         trimmed,
         nodes.map((n) => ({
@@ -102,13 +129,11 @@ export default function ChatPanel({
         edges.map((e) => ({ source: e.source, target: e.target }))
       );
 
-      // Add assistant reply
       setMessages((prev) => [
         ...prev,
         { role: "assistant", content: response.reply },
       ]);
 
-      // Execute any actions
       if (response.actions && response.actions.length > 0) {
         executeActions(response.actions);
       }
@@ -131,280 +156,217 @@ export default function ChatPanel({
     }
   };
 
-  // Toggle button (always visible)
-  if (!isOpen) {
-    return (
-      <button
-        onClick={() => setIsOpen(true)}
-        style={{
-          position: "fixed",
-          bottom: "24px",
-          right: "24px",
-          width: "48px",
-          height: "48px",
-          borderRadius: "50%",
-          background: "#1d1d1f",
-          color: "#fff",
-          border: "none",
-          cursor: "pointer",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
-          zIndex: 1000,
-          transition: "transform 0.15s, box-shadow 0.15s",
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.transform = "scale(1.08)";
-          e.currentTarget.style.boxShadow = "0 6px 16px rgba(0,0,0,0.2)";
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.transform = "scale(1)";
-          e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.15)";
-        }}
-        title="Chat with AI"
-      >
-        {/* Chat bubble icon */}
-        <svg
-          width="22"
-          height="22"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-        </svg>
-      </button>
-    );
-  }
-
-  // Full chat panel
   return (
     <div
       style={{
-        position: "fixed",
-        bottom: "24px",
-        right: "24px",
-        width: "380px",
-        height: "480px",
-        background: "#fff",
-        borderRadius: "16px",
-        boxShadow: "0 8px 32px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.08)",
+        borderTop: `1px solid ${ct.border}`,
+        background: ct.bg,
         display: "flex",
-        flexDirection: "column",
-        zIndex: 1000,
-        overflow: "hidden",
-        border: "1px solid #e5e5e5",
+        justifyContent: "center",
+        transition: "height 0.2s ease",
+        height: expanded ? "240px" : "56px",
+        flexShrink: 0,
       }}
     >
-      {/* Header */}
+    <div
+      style={{
+        width: isMobile ? "100%" : "50%",
+        minWidth: isMobile ? 0 : "400px",
+        maxWidth: isMobile ? "100%" : "800px",
+        display: "flex",
+        flexDirection: "column",
+        ...(isMobile ? { padding: "0 4px" } : {}),
+      }}
+    >
+      {/* Message history (visible when expanded) */}
+      {expanded && (
+        <div
+          style={{
+            flex: 1,
+            overflowY: "auto",
+            padding: "10px 16px",
+            display: "flex",
+            flexDirection: "column",
+            gap: "8px",
+            minHeight: 0,
+          }}
+        >
+          {messages.length === 0 && (
+            <div
+              style={{
+                textAlign: "center",
+                color: ct.muted,
+                fontSize: "12px",
+                marginTop: "20px",
+                lineHeight: 1.5,
+              }}
+            >
+              Try: "Add a text input connected to a photo generator" or "Load the Podcast to Report preset"
+            </div>
+          )}
+
+          {messages.map((msg, i) => (
+            <div
+              key={i}
+              style={{
+                display: "flex",
+                justifyContent:
+                  msg.role === "user" ? "flex-end" : "flex-start",
+              }}
+            >
+              <div
+                style={{
+                  maxWidth: "70%",
+                  padding: "8px 12px",
+                  borderRadius:
+                    msg.role === "user"
+                      ? "12px 12px 4px 12px"
+                      : "12px 12px 12px 4px",
+                  background:
+                    msg.role === "user" ? ct.userBg : ct.msgBg,
+                  color: msg.role === "user" ? "#fff" : ct.text,
+                  fontSize: "12px",
+                  lineHeight: 1.4,
+                  wordBreak: "break-word",
+                }}
+              >
+                {msg.content}
+              </div>
+            </div>
+          ))}
+
+          {loading && (
+            <div style={{ display: "flex", justifyContent: "flex-start" }}>
+              <div
+                style={{
+                  padding: "8px 12px",
+                  borderRadius: "12px 12px 12px 4px",
+                  background: ct.msgBg,
+                  color: ct.muted,
+                  fontSize: "12px",
+                }}
+              >
+                Thinking...
+              </div>
+            </div>
+          )}
+
+          <div ref={messagesEndRef} />
+        </div>
+      )}
+
+      {/* Input bar (always visible) */}
       <div
         style={{
+          padding: "10px 16px",
           display: "flex",
+          gap: "8px",
           alignItems: "center",
-          justifyContent: "space-between",
-          padding: "14px 16px",
-          borderBottom: "1px solid #e5e5e5",
-          background: "#fafafa",
+          borderTop: expanded ? `1px solid ${ct.border}` : "none",
         }}
       >
-        <div>
-          <div
-            style={{
-              fontSize: "14px",
-              fontWeight: 600,
-              color: "#1d1d1f",
-              letterSpacing: "-0.2px",
-            }}
-          >
-            Flow Assistant
-          </div>
-          <div style={{ fontSize: "11px", color: "#86868b" }}>
-            Describe what you want to build
-          </div>
-        </div>
+        {/* Expand/collapse toggle */}
         <button
-          onClick={() => setIsOpen(false)}
+          onClick={() => setExpanded(!expanded)}
           style={{
-            width: "28px",
-            height: "28px",
-            borderRadius: "50%",
-            border: "none",
-            background: "#e5e5e5",
-            color: "#86868b",
+            width: "32px",
+            height: "32px",
+            borderRadius: "8px",
+            border: `1px solid ${ct.inputBorder}`,
+            background: expanded ? ct.inputBg : ct.bg,
+            color: ct.muted,
             cursor: "pointer",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            fontSize: "16px",
-            lineHeight: 1,
+            flexShrink: 0,
             transition: "background 0.15s",
           }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = "#d1d1d6";
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = "#e5e5e5";
-          }}
+          title={expanded ? "Collapse chat" : "Expand chat"}
         >
-          &times;
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            style={{
+              transform: expanded ? "rotate(180deg)" : "rotate(0deg)",
+              transition: "transform 0.2s",
+            }}
+          >
+            <polyline points="18 15 12 9 6 15" />
+          </svg>
         </button>
-      </div>
 
-      {/* Messages */}
-      <div
-        style={{
-          flex: 1,
-          overflowY: "auto",
-          padding: "12px 16px",
-          display: "flex",
-          flexDirection: "column",
-          gap: "10px",
-        }}
-      >
-        {messages.length === 0 && (
-          <div
-            style={{
-              textAlign: "center",
-              color: "#86868b",
-              fontSize: "13px",
-              marginTop: "40px",
-              lineHeight: 1.5,
-            }}
-          >
-            <div style={{ fontSize: "24px", marginBottom: "8px" }}>
-              <svg
-                width="32"
-                height="32"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="#d1d1d6"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                style={{ display: "inline-block" }}
-              >
-                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-              </svg>
-            </div>
-            Try something like:
-            <br />
-            "Add a text input connected to a photo generator"
-            <br />
-            "Load the Podcast to Report preset"
-            <br />
-            "Add a summarize node"
-          </div>
-        )}
+        {/* Chat icon label */}
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke={ct.muted}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          style={{ flexShrink: 0 }}
+        >
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+        </svg>
 
-        {messages.map((msg, i) => (
-          <div
-            key={i}
-            style={{
-              display: "flex",
-              justifyContent:
-                msg.role === "user" ? "flex-end" : "flex-start",
-            }}
-          >
-            <div
-              style={{
-                maxWidth: "85%",
-                padding: "10px 14px",
-                borderRadius:
-                  msg.role === "user"
-                    ? "14px 14px 4px 14px"
-                    : "14px 14px 14px 4px",
-                background:
-                  msg.role === "user" ? "#1d1d1f" : "#f5f5f7",
-                color: msg.role === "user" ? "#fff" : "#1d1d1f",
-                fontSize: "13px",
-                lineHeight: 1.45,
-                wordBreak: "break-word",
-              }}
-            >
-              {msg.content}
-            </div>
-          </div>
-        ))}
-
-        {loading && (
-          <div style={{ display: "flex", justifyContent: "flex-start" }}>
-            <div
-              style={{
-                padding: "10px 14px",
-                borderRadius: "14px 14px 14px 4px",
-                background: "#f5f5f7",
-                color: "#86868b",
-                fontSize: "13px",
-              }}
-            >
-              Thinking...
-            </div>
-          </div>
-        )}
-
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* Input area */}
-      <div
-        style={{
-          padding: "12px 16px",
-          borderTop: "1px solid #e5e5e5",
-          display: "flex",
-          gap: "8px",
-          background: "#fafafa",
-        }}
-      >
         <input
           ref={inputRef}
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="What do you want to build?"
+          placeholder="Describe what you want to build..."
           disabled={loading}
           style={{
             flex: 1,
-            padding: "10px 14px",
-            borderRadius: "10px",
-            border: "1px solid #e5e5e5",
-            background: "#fff",
+            padding: "8px 12px",
+            borderRadius: "8px",
+            border: `1px solid ${ct.inputBorder}`,
+            background: ct.inputBg,
             fontSize: "13px",
             outline: "none",
-            color: "#1d1d1f",
+            color: ct.text,
             transition: "border-color 0.15s",
           }}
           onFocus={(e) => {
             e.currentTarget.style.borderColor = "#0071e3";
+            e.currentTarget.style.background = darkMode ? "#333" : "#fff";
           }}
           onBlur={(e) => {
-            e.currentTarget.style.borderColor = "#e5e5e5";
+            e.currentTarget.style.borderColor = ct.inputBorder;
+            e.currentTarget.style.background = ct.inputBg;
           }}
         />
         <button
           onClick={handleSend}
           disabled={loading || !input.trim()}
           style={{
-            padding: "10px 16px",
-            borderRadius: "10px",
+            padding: "8px 14px",
+            borderRadius: "8px",
             border: "none",
             background:
-              loading || !input.trim() ? "#d1d1d6" : "#1d1d1f",
+              loading || !input.trim() ? "#d1d1d6" : "#34c759",
             color: "#fff",
             fontSize: "13px",
             fontWeight: 500,
             cursor: loading || !input.trim() ? "default" : "pointer",
             transition: "background 0.15s",
             whiteSpace: "nowrap",
+            flexShrink: 0,
           }}
         >
-          Send
+          {loading ? "..." : "Send"}
         </button>
       </div>
+    </div>{/* end inner 50% container */}
     </div>
   );
 }

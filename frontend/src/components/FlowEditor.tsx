@@ -75,16 +75,10 @@ const edgeStyles = `
 import TextInputNode from "./nodes/TextInputNode";
 import ImageUploadNode from "./nodes/ImageUploadNode";
 import URLInputNode from "./nodes/URLInputNode";
-import PodcastEpisodeNode from "./nodes/PodcastEpisodeNode";
 import PodcastRSSNode from "./nodes/PodcastRSSNode";
 import AudioUploadNode from "./nodes/AudioUploadNode";
 import VideoUploadNode from "./nodes/VideoUploadNode";
 import PDFUploadNode from "./nodes/PDFUploadNode";
-import StockTickerNode from "./nodes/StockTickerNode";
-import ReportJSONNode from "./nodes/ReportJSONNode";
-
-// Processing nodes
-import EnhanceTextNode from "./nodes/EnhanceTextNode";
 import IPhonePhotoNode from "./nodes/IPhonePhotoNode";
 import AnimateNode from "./nodes/AnimateNode";
 import TextOverlayNode from "./nodes/TextOverlayNode";
@@ -127,15 +121,10 @@ const nodeTypes: Record<string, any> = {
   textInput: TextInputNode,
   imageUpload: ImageUploadNode,
   urlInput: URLInputNode,
-  podcastEpisode: PodcastEpisodeNode,
   podcastRSS: PodcastRSSNode,
   audioUpload: AudioUploadNode,
   videoUpload: VideoUploadNode,
   pdfUpload: PDFUploadNode,
-  stockTicker: StockTickerNode,
-  reportJSON: ReportJSONNode,
-  // Processing
-  enhanceText: EnhanceTextNode,
   iphonePhoto: IPhonePhotoNode,
   animate: AnimateNode,
   textOverlay: TextOverlayNode,
@@ -264,7 +253,7 @@ const presetFlows: PresetFlow[] = [
     name: "FWP Pipeline",
     description: "Podcast to ads (full pipeline)",
     nodes: [
-      { id: "podcast-1", type: "podcastEpisode", position: { x: 50, y: 200 }, data: { audioUrl: "", title: "" } },
+      { id: "podcast-1", type: "podcastRSS", position: { x: 50, y: 200 }, data: { feedUrl: "", audioUrl: "", title: "" } },
       { id: "transcribe-1", type: "transcribe", position: { x: 320, y: 200 }, data: { inputValue: "", transcript: "" } },
       { id: "report-1", type: "generateReport", position: { x: 590, y: 200 }, data: { inputValue: "", report: null } },
       { id: "copy-1", type: "generateCopy", position: { x: 860, y: 100 }, data: { inputValue: "", copy: null } },
@@ -319,20 +308,12 @@ const sources: SidebarItem[] = [
     tooltip: { description: "Upload an MP4, MOV, or WebM video file.", inputType: "None (file picker)", outputType: "Video (base64)" } },
   { type: "pdfUpload", label: "PDF Upload", icon: "P", color: "#c0392b",
     tooltip: { description: "Upload a PDF document.", inputType: "None (file picker)", outputType: "PDF (base64)" } },
-  { type: "podcastEpisode", label: "Podcast Episode", icon: "E", color: "#9b59b6",
-    tooltip: { description: "Fetch a podcast episode by URL to get its audio.", inputType: "None (enter URL)", outputType: "Audio URL" } },
-  { type: "podcastRSS", label: "Podcast RSS", icon: "R", color: "#e67e22",
-    tooltip: { description: "Load an RSS feed and pick an episode.", inputType: "None (enter RSS URL)", outputType: "Audio URL" } },
-  { type: "stockTicker", label: "Stock Ticker", icon: "$", color: "#27ae60",
-    tooltip: { description: "Look up stock price and fundamentals by ticker symbol.", inputType: "None (enter ticker)", outputType: "Stock data (JSON)" } },
-  { type: "reportJSON", label: "Report JSON", icon: "J", color: "#8e44ad",
-    tooltip: { description: "Paste or upload a report JSON file.", inputType: "None (paste/upload)", outputType: "Report JSON" } },
+  { type: "podcastRSS", label: "Podcast", icon: "P", color: "#e67e22",
+    tooltip: { description: "Load an RSS feed, pick an episode, or paste a direct episode link.", inputType: "None (enter URL)", outputType: "Audio URL" } },
 ];
 
 const operations: SidebarItem[] = [
   // Text processing
-  { type: "enhanceText", label: "Enhance Text", icon: "E", gradient: "linear-gradient(135deg, #f59e0b 0%, #ef4444 100%)",
-    tooltip: { description: "Rewrites and improves text using AI.", inputType: "Text", outputType: "Text" } },
   { type: "summarize", label: "Summarize Text", icon: "S", gradient: "linear-gradient(135deg, #f97316 0%, #ea580c 100%)",
     tooltip: { description: "Condenses text to a shorter summary.", inputType: "Text or Report JSON", outputType: "Text" } },
   { type: "extractKeyPoints", label: "Key Points", icon: "K", gradient: "linear-gradient(135deg, #10b981 0%, #059669 100%)",
@@ -417,6 +398,20 @@ function loadFromStorage(): { nodes: Node[]; edges: Edge[]; counter: number } {
 }
 
 export default function FlowEditor() {
+  // Mobile detection: < 640px
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth < 640);
+  const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 640);
+  useEffect(() => {
+    const onResize = () => {
+      const mobile = window.innerWidth < 640;
+      setIsMobile(mobile);
+      // Auto-close sidebar when switching to mobile, auto-open on desktop
+      setSidebarOpen(!mobile);
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
   // Tooltip state for sidebar items (uses fixed positioning to escape overflow)
   const [activeTooltip, setActiveTooltip] = useState<{
     tooltip: TooltipInfo;
@@ -456,8 +451,38 @@ export default function FlowEditor() {
   // Track when we need to fitView (after loading a preset)
   const shouldFitView = useRef(false);
 
+  // Dark mode state (persisted to localStorage)
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem("flow-ops-dark") === "true");
+  const toggleDarkMode = () => {
+    setDarkMode((prev) => {
+      localStorage.setItem("flow-ops-dark", String(!prev));
+      return !prev;
+    });
+  };
+
+  // Theme colors based on dark mode
+  const t = darkMode
+    ? {
+        bg: "#1a1a1a", sidebar: "#111", sidebarBorder: "#333", canvas: "#222",
+        text: "#e5e5e5", textMuted: "#888", itemBg: "#2a2a2a", itemHover: "#333",
+        sectionHead: "#777", presetBg: "#2a2a2a", presetHover: "#333",
+        border: "#333", controlsBg: "#2a2a2a", controlsBorder: "#444",
+        clearBg: "#2a2a2a", clearBorder: "#444", clearText: "#888",
+        edgeStroke: "#555", gridColor: "#333", btnBg: "#333",
+      }
+    : {
+        bg: "#fff", sidebar: "#fff", sidebarBorder: "#e5e5e5", canvas: "#fafafa",
+        text: "#1d1d1f", textMuted: "#86868b", itemBg: "#f5f5f7", itemHover: "#e8e8ed",
+        sectionHead: "#86868b", presetBg: "#f5f5f7", presetHover: "#e8e8ed",
+        border: "#e5e5e5", controlsBg: "#fff", controlsBorder: "#e5e5e5",
+        clearBg: "#fff", clearBorder: "#e5e5e5", clearText: "#86868b",
+        edgeStroke: "#d1d1d6", gridColor: "#e5e5e5", btnBg: "#fff",
+      };
+
   // Debug panel state
   const [debugOpen, setDebugOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [selfTestOpen, setSelfTestOpen] = useState(false);
   const [debugCount, setDebugCount] = useState(0);
   // Subscribe to debug log changes to update the badge count
   useEffect(() => {
@@ -492,11 +517,13 @@ export default function FlowEditor() {
     };
   }, [nodes, edges]);
 
-  // Clear canvas function
-  const clearCanvas = () => {
-    if (nodes.length === 0 || confirm("Clear all nodes and connections?")) {
+  // Clear canvas function. skipConfirm=true when called from chat.
+  const clearCanvas = (skipConfirm = false) => {
+    if (skipConfirm || nodes.length === 0 || confirm("Clear all nodes and connections?")) {
       setNodes([]);
       setEdges([]);
+      nodesRef.current = [];
+      edgesRef.current = [];
       nodeIdCounter.current = 1;
       localStorage.removeItem(STORAGE_KEY_NODES);
       localStorage.removeItem(STORAGE_KEY_EDGES);
@@ -698,12 +725,8 @@ export default function FlowEditor() {
       case "audioUpload": return { audioBase64: "", mimeType: "", filename: "" };
       case "videoUpload": return { videoBase64: "", mimeType: "", filename: "" };
       case "pdfUpload": return { pdfBase64: "", filename: "" };
-      case "podcastEpisode": return { audioUrl: "", title: "" };
-      case "podcastRSS": return { audioUrl: "", title: "", episodes: [] };
-      case "stockTicker": return { ticker: "", name: "", price: 0, fundamentals: {} };
-      case "reportJSON": return { report: null };
+      case "podcastRSS": return { feedUrl: "", audioUrl: "", title: "", episodes: [] };
       // Processing
-      case "enhanceText": return { inputValue: "", outputValue: "" };
       case "transcribe": return { inputValue: "", transcript: "" };
       case "generateReport": return { inputValue: "", report: null };
       case "generateCopy": return { inputValue: "", copy: null };
@@ -766,37 +789,43 @@ export default function FlowEditor() {
   };
 
 
-  // Chat panel callbacks: add a node at a smart position and return its ID
-  const chatAddNode = useCallback(
-    (nodeType: string, data: Record<string, unknown>): string => {
-      const id = `${nodeType}-${nodeIdCounter.current++}`;
-
-      // Place new nodes to the right of existing ones, staggered vertically
+  // Chat panel callback: batch-add nodes laid out left-to-right in flow order
+  const chatAddNodes = useCallback(
+    (
+      newNodes: { nodeType: string; data: Record<string, unknown> }[]
+    ): string[] => {
       const currentNodes = nodesRef.current;
-      let x = 100;
-      let y = 200;
-      if (currentNodes.length > 0) {
-        const maxX = Math.max(...currentNodes.map((n) => n.position.x));
-        x = maxX + 300;
-        const nodesAtSimilarX = currentNodes.filter(
-          (n) => Math.abs(n.position.x - x) < 50
-        );
-        y = 200 + nodesAtSimilarX.length * 100;
-      }
 
-      // Merge provided data on top of default initial data for this type
-      const initialData = getInitialData(nodeType);
-      const mergedData = { ...initialData, ...data };
+      // Start position: to the right of existing nodes, or at the beginning
+      const startX =
+        currentNodes.length > 0
+          ? Math.max(...currentNodes.map((n) => n.position.x)) + 350
+          : 100;
+      const startY = 200;
+      const spacingX = 300; // horizontal gap between nodes in the flow
 
-      const newNode: Node = {
-        id,
-        type: nodeType,
-        position: { x, y },
-        data: mergedData,
-      };
+      const ids: string[] = [];
+      const nodesToAdd: Node[] = [];
 
-      setNodes((nds) => [...nds, newNode]);
-      return id;
+      newNodes.forEach((item, index) => {
+        const id = `${item.nodeType}-${nodeIdCounter.current++}`;
+        ids.push(id);
+
+        const initialData = getInitialData(item.nodeType);
+        const mergedData = { ...initialData, ...item.data };
+
+        nodesToAdd.push({
+          id,
+          type: item.nodeType,
+          position: { x: startX + index * spacingX, y: startY },
+          data: mergedData,
+        });
+      });
+
+      setNodes((nds) => [...nds, ...nodesToAdd]);
+      // Update ref immediately so edges can find these nodes
+      nodesRef.current = [...nodesRef.current, ...nodesToAdd];
+      return ids;
     },
     [setNodes]
   );
@@ -826,21 +855,49 @@ export default function FlowEditor() {
     [loadPreset]
   );
 
+  // Tap-to-add: on mobile, clicking a sidebar item adds it to the canvas center
+  const tapToAddNode = useCallback(
+    (nodeType: string) => {
+      // Place node near center of the visible canvas
+      let position = { x: 200, y: 200 };
+      if (reactFlowInstance.current) {
+        position = reactFlowInstance.current.screenToFlowPosition({
+          x: window.innerWidth / 2,
+          y: window.innerHeight / 3,
+        });
+      }
+      const newNode: Node = {
+        id: `${nodeType}-${nodeIdCounter.current++}`,
+        type: nodeType,
+        position,
+        data: getInitialData(nodeType),
+      };
+      setNodes((nds) => [...nds, newNode]);
+      // Auto-close sidebar after adding
+      setSidebarOpen(false);
+    },
+    [setNodes]
+  );
+
   // Renders a single sidebar item with a hover tooltip
   const renderSidebarItem = (item: SidebarItem) => (
     <div
       key={item.type}
-      draggable
+      draggable={!isMobile}
       onDragStart={(e) => {
+        if (isMobile) { e.preventDefault(); return; }
         onDragStart(e, item.type);
         hideTooltip(); // Hide tooltip when dragging starts
       }}
+      onClick={() => {
+        if (isMobile) tapToAddNode(item.type);
+      }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.background = "#e8e8ed";
-        showTooltip(e, item.tooltip);
+        e.currentTarget.style.background = t.itemHover;
+        if (!isMobile) showTooltip(e, item.tooltip);
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.background = "#f5f5f7";
+        e.currentTarget.style.background = t.itemBg;
         hideTooltip();
       }}
       style={{
@@ -848,10 +905,10 @@ export default function FlowEditor() {
         alignItems: "center",
         gap: "12px",
         padding: "8px 10px",
-        background: "#f5f5f7",
+        background: t.itemBg,
         borderRadius: "10px",
         marginBottom: "4px",
-        cursor: "grab",
+        cursor: isMobile ? "pointer" : "grab",
         transition: "background 0.15s",
       }}
     >
@@ -871,12 +928,14 @@ export default function FlowEditor() {
       >
         {item.icon}
       </div>
-      <span style={{ fontSize: "12px", fontWeight: 500 }}>{item.label}</span>
+      <span style={{ fontSize: "12px", fontWeight: 500, color: t.text }}>{item.label}</span>
     </div>
   );
 
   return (
-    <div style={{ display: "flex", width: "100%", height: "100%" }}>
+    <div style={{ display: "flex", flexDirection: "column", width: "100%", height: "100%" }}>
+    {/* Top row: sidebar + canvas */}
+    <div style={{ display: "flex", flex: 1, minHeight: 0 }}>
       <style>{edgeStyles}</style>
       {/* Fixed-position tooltip portal, rendered outside sidebar overflow */}
       {activeTooltip && (
@@ -900,17 +959,81 @@ export default function FlowEditor() {
         </div>
       )}
 
+      {/* Mobile hamburger toggle */}
+      {isMobile && (
+        <button
+          onClick={() => setSidebarOpen((o) => !o)}
+          style={{
+            position: "fixed",
+            top: 10,
+            left: 10,
+            width: 40,
+            height: 40,
+            borderRadius: 10,
+            border: `1px solid ${t.border}`,
+            background: t.btnBg,
+            color: t.text,
+            fontSize: 20,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1001,
+            boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+          }}
+        >
+          {sidebarOpen ? "\u2715" : "\u2630"}
+        </button>
+      )}
+
+      {/* Mobile backdrop (closes sidebar when tapping outside) */}
+      {isMobile && sidebarOpen && (
+        <div
+          onClick={() => setSidebarOpen(false)}
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: "rgba(0,0,0,0.4)",
+            zIndex: 999,
+          }}
+        />
+      )}
+
       {/* Sidebar */}
       <div
-        style={{
-          width: "240px",
-          background: "#fff",
-          borderRight: "1px solid #e5e5e5",
-          padding: "16px 12px",
-          display: "flex",
-          flexDirection: "column",
-          overflowY: "auto",
-        }}
+        style={
+          isMobile
+            ? {
+                // Mobile: fixed overlay, completely hidden when closed
+                display: sidebarOpen ? "flex" : "none",
+                position: "fixed" as const,
+                top: 0,
+                left: 0,
+                bottom: 0,
+                width: "280px",
+                zIndex: 1000,
+                background: t.sidebar,
+                flexDirection: "column" as const,
+                overflowY: "auto" as const,
+                paddingTop: "60px",
+                padding: "60px 12px 16px 12px",
+                boxShadow: "4px 0 20px rgba(0,0,0,0.2)",
+              }
+            : {
+                // Desktop: always visible, fixed width
+                width: "240px",
+                minWidth: "240px",
+                background: t.sidebar,
+                borderRight: `1px solid ${t.sidebarBorder}`,
+                padding: "16px 12px",
+                display: "flex",
+                flexDirection: "column" as const,
+                overflowY: "auto" as const,
+              }
+        }
       >
         <div style={{ marginBottom: "24px" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "4px" }}>
@@ -920,19 +1043,21 @@ export default function FlowEditor() {
                 fontWeight: 600,
                 letterSpacing: "-0.3px",
                 margin: 0,
+                color: t.text,
               }}
             >
               flow-ops
             </h1>
+            <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
             {nodes.length > 0 && (
               <button
-                onClick={clearCanvas}
+                onClick={() => clearCanvas()}
                 style={{
                   padding: "4px 10px",
                   borderRadius: "6px",
-                  border: "1px solid #e5e5e5",
-                  background: "#fff",
-                  color: "#86868b",
+                  border: `1px solid ${t.clearBorder}`,
+                  background: t.clearBg,
+                  color: t.clearText,
                   fontSize: "11px",
                   cursor: "pointer",
                   transition: "all 0.15s",
@@ -949,9 +1074,10 @@ export default function FlowEditor() {
                 Clear
               </button>
             )}
+            </div>{/* end dark mode + clear buttons wrapper */}
           </div>
-          <p style={{ fontSize: "13px", color: "#86868b", margin: 0 }}>
-            Drag nodes to build
+          <p style={{ fontSize: "13px", color: t.textMuted, margin: 0 }}>
+            {isMobile ? "Tap to add nodes" : "Drag nodes to build"}
           </p>
         </div>
 
@@ -960,7 +1086,7 @@ export default function FlowEditor() {
             style={{
               fontSize: "11px",
               fontWeight: 600,
-              color: "#86868b",
+              color: t.sectionHead,
               textTransform: "uppercase",
               letterSpacing: "0.5px",
               marginBottom: "12px",
@@ -976,7 +1102,7 @@ export default function FlowEditor() {
             style={{
               fontSize: "11px",
               fontWeight: 600,
-              color: "#86868b",
+              color: t.sectionHead,
               textTransform: "uppercase",
               letterSpacing: "0.5px",
               marginBottom: "12px",
@@ -992,7 +1118,7 @@ export default function FlowEditor() {
             style={{
               fontSize: "11px",
               fontWeight: 600,
-              color: "#86868b",
+              color: t.sectionHead,
               textTransform: "uppercase",
               letterSpacing: "0.5px",
               marginBottom: "8px",
@@ -1008,7 +1134,7 @@ export default function FlowEditor() {
             style={{
               fontSize: "11px",
               fontWeight: 600,
-              color: "#86868b",
+              color: t.sectionHead,
               textTransform: "uppercase",
               letterSpacing: "0.5px",
               marginBottom: "8px",
@@ -1019,12 +1145,12 @@ export default function FlowEditor() {
           {utilities.map(renderSidebarItem)}
         </div>
 
-        <div style={{ marginTop: "auto", paddingTop: "24px", borderTop: "1px solid #e5e5e5" }}>
+        <div style={{ marginTop: "auto", paddingTop: "24px", borderTop: `1px solid ${t.border}` }}>
           <h3
             style={{
               fontSize: "11px",
               fontWeight: 600,
-              color: "#86868b",
+              color: t.sectionHead,
               textTransform: "uppercase",
               letterSpacing: "0.5px",
               marginBottom: "12px",
@@ -1043,7 +1169,7 @@ export default function FlowEditor() {
                   flexDirection: "column",
                   alignItems: "flex-start",
                   padding: "10px 12px",
-                  background: "#f5f5f7",
+                  background: t.presetBg,
                   borderRadius: "8px",
                   border: "none",
                   cursor: "pointer",
@@ -1052,14 +1178,14 @@ export default function FlowEditor() {
                   fontFamily: "inherit",
                 }}
                 onMouseEnter={(e) => {
-                  e.currentTarget.style.background = "#e8e8ed";
+                  e.currentTarget.style.background = t.presetHover;
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "#f5f5f7";
+                  e.currentTarget.style.background = t.presetBg;
                 }}
               >
-                <span style={{ fontSize: "13px", fontWeight: 500 }}>{preset.name}</span>
-                <span style={{ fontSize: "11px", color: "#86868b" }}>{preset.description}</span>
+                <span style={{ fontSize: "13px", fontWeight: 500, color: t.text }}>{preset.name}</span>
+                <span style={{ fontSize: "11px", color: t.textMuted }}>{preset.description}</span>
               </button>
             ))}
           </div>
@@ -1090,98 +1216,199 @@ export default function FlowEditor() {
           minZoom={0.3}
           maxZoom={1.5}
           deleteKeyCode={["Delete", "Backspace"]}
-          style={{ background: "#fafafa" }}
+          style={{ background: t.canvas }}
           defaultEdgeOptions={{
-            style: { stroke: "#d1d1d6", strokeWidth: 2 },
+            style: { stroke: t.edgeStroke, strokeWidth: 2 },
           }}
+          proOptions={{ hideAttribution: true }}
         >
           <Controls
-            style={{ background: "#fff", borderRadius: "12px", border: "1px solid #e5e5e5" }}
+            position="bottom-right"
+            style={{ background: t.controlsBg, borderRadius: "12px", border: `1px solid ${t.controlsBorder}` }}
           />
-          <Background color="#e5e5e5" gap={24} size={1} />
+          <Background color={t.gridColor} gap={24} size={1} />
         </ReactFlow>
       </div>
 
-      {/* Chat panel for natural language flow building */}
+      </div>{/* end top row (sidebar + canvas) */}
+
+      {/* Chat bar pinned to bottom */}
       <ChatPanel
         nodes={nodes}
         edges={edges}
-        onAddNode={chatAddNode}
+        onAddNodes={chatAddNodes}
         onAddEdge={chatAddEdge}
         onLoadPreset={chatLoadPreset}
+        onClearCanvas={clearCanvas}
+        darkMode={darkMode}
+        isMobile={isMobile}
       />
 
-      {/* Debug panel toggle button (top-right of canvas) */}
-      <button
-        onClick={() => setDebugOpen(!debugOpen)}
-        title="Toggle debug panel"
-        style={{
-          position: "fixed",
-          top: 12,
-          right: 12,
-          width: 36,
-          height: 36,
-          borderRadius: 8,
-          border: "1px solid #e5e5e5",
-          background: debugOpen ? "#6366f1" : "#fff",
-          color: debugOpen ? "#fff" : "#86868b",
-          fontSize: 16,
-          cursor: "pointer",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          zIndex: 998,
-          boxShadow: "0 1px 4px rgba(0,0,0,0.08)",
-          transition: "all 0.15s",
-        }}
-      >
-        {/* Bug icon (simple SVG) */}
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M8 2l1.88 1.88" />
-          <path d="M14.12 3.88L16 2" />
-          <path d="M9 7.13v-1a3.003 3.003 0 116 0v1" />
-          <path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 014-4h4a4 4 0 014 4v3c0 3.3-2.7 6-6 6" />
-          <path d="M12 20v-9" />
-          <path d="M6.53 9C4.6 8.8 3 7.1 3 5" />
-          <path d="M6 13H2" />
-          <path d="M3 21c0-2.1 1.7-3.9 3.8-4" />
-          <path d="M20.97 5c0 2.1-1.6 3.8-3.5 4" />
-          <path d="M22 13h-4" />
-          <path d="M17.2 17c2.1.1 3.8 1.9 3.8 4" />
-        </svg>
-        {/* Badge showing entry count */}
-        {debugCount > 0 && (
-          <span
+      {/* Settings gear (top-right) */}
+      <div style={{ position: "fixed", top: 12, right: 12, zIndex: 998 }}>
+        <button
+          onClick={() => setSettingsOpen((o) => !o)}
+          title="Settings"
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: 8,
+            border: `1px solid ${t.border}`,
+            background: settingsOpen ? (darkMode ? "#444" : "#e8e8ed") : t.btnBg,
+            color: t.textMuted,
+            fontSize: 16,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            boxShadow: "0 1px 4px rgba(0,0,0,0.08)",
+            transition: "all 0.15s",
+          }}
+        >
+          {/* Gear SVG */}
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
+          </svg>
+          {/* Debug badge on gear */}
+          {debugCount > 0 && !settingsOpen && (
+            <span
+              style={{
+                position: "absolute",
+                top: -4,
+                right: -4,
+                fontSize: 9,
+                fontWeight: 700,
+                color: "#fff",
+                background: "#ef4444",
+                borderRadius: 8,
+                padding: "1px 4px",
+                minWidth: 14,
+                textAlign: "center",
+                lineHeight: "14px",
+              }}
+            >
+              {debugCount > 99 ? "99+" : debugCount}
+            </span>
+          )}
+        </button>
+
+        {/* Settings dropdown */}
+        {settingsOpen && (
+          <div
             style={{
               position: "absolute",
-              top: -4,
-              right: -4,
-              fontSize: 9,
-              fontWeight: 700,
-              color: "#fff",
-              background: "#ef4444",
-              borderRadius: 8,
-              padding: "1px 4px",
-              minWidth: 14,
-              textAlign: "center",
-              lineHeight: "14px",
+              top: 44,
+              right: 0,
+              background: t.bg,
+              border: `1px solid ${t.border}`,
+              borderRadius: 10,
+              boxShadow: "0 4px 16px rgba(0,0,0,0.12)",
+              padding: "4px",
+              minWidth: 180,
             }}
           >
-            {debugCount > 99 ? "99+" : debugCount}
-          </span>
+            {/* Dark mode */}
+            <button
+              onClick={() => { toggleDarkMode(); setSettingsOpen(false); }}
+              style={{
+                width: "100%",
+                padding: "10px 12px",
+                border: "none",
+                background: "transparent",
+                color: t.text,
+                fontSize: 13,
+                fontWeight: 500,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                borderRadius: 8,
+                textAlign: "left",
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = t.itemHover; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+            >
+              <span style={{ fontSize: 16, width: 20, textAlign: "center" }}>{darkMode ? "\u2600" : "\u263D"}</span>
+              {darkMode ? "Light mode" : "Dark mode"}
+            </button>
+
+            {/* Debug panel */}
+            <button
+              onClick={() => { setDebugOpen((o) => !o); setSettingsOpen(false); }}
+              style={{
+                width: "100%",
+                padding: "10px 12px",
+                border: "none",
+                background: "transparent",
+                color: t.text,
+                fontSize: 13,
+                fontWeight: 500,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                borderRadius: 8,
+                textAlign: "left",
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = t.itemHover; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+            >
+              <span style={{ fontSize: 16, width: 20, textAlign: "center" }}>{debugOpen ? "\u2717" : "\u{1F41B}"}</span>
+              {debugOpen ? "Close debug" : "Debug log"}
+              {debugCount > 0 && (
+                <span style={{ marginLeft: "auto", fontSize: 11, color: "#ef4444", fontWeight: 600 }}>{debugCount}</span>
+              )}
+            </button>
+
+            {/* Self-test */}
+            <button
+              onClick={() => { setSettingsOpen(false); setSelfTestOpen(true); }}
+              style={{
+                width: "100%",
+                padding: "10px 12px",
+                border: "none",
+                background: "transparent",
+                color: t.text,
+                fontSize: 13,
+                fontWeight: 500,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                borderRadius: 8,
+                textAlign: "left",
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = t.itemHover; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+            >
+              <span style={{ fontSize: 16, width: 20, textAlign: "center" }}>{"\u2699"}</span>
+              Run self-tests
+            </button>
+          </div>
         )}
-      </button>
+      </div>
+
+      {/* Close settings dropdown when clicking outside */}
+      {settingsOpen && (
+        <div
+          onClick={() => setSettingsOpen(false)}
+          style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, zIndex: 997 }}
+        />
+      )}
 
       {/* Debug panel (slides in from right) */}
       <DebugPanel isOpen={debugOpen} onClose={() => setDebugOpen(false)} />
 
-      {/* Self-test runner (gear icon in bottom-right corner) */}
+      {/* Self-test runner (opened from settings menu) */}
       <SelfTest
         nodes={nodes}
         edges={edges}
         setNodes={setNodes}
         setEdges={setEdges}
         presetFlows={presetFlows}
+        externalOpen={selfTestOpen}
+        onClose={() => setSelfTestOpen(false)}
       />
     </div>
   );

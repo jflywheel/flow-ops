@@ -1,6 +1,6 @@
 import { Handle, Position } from "@xyflow/react";
 import { useState } from "react";
-import { fetchPodcastRSS } from "../../api";
+import { fetchPodcastRSS, fetchPodcastEpisode, setDebugContext } from "../../api";
 
 interface Episode {
   title: string;
@@ -11,6 +11,7 @@ interface Episode {
 interface PodcastRSSNodeProps {
   id: string;
   data: {
+    feedUrl?: string;
     audioUrl?: string;
     title?: string;
     updateNodeData?: (nodeId: string, data: Record<string, unknown>) => void;
@@ -18,21 +19,29 @@ interface PodcastRSSNodeProps {
   };
 }
 
-// Preset podcast feeds
-const PRESET_FEEDS = [
-  { name: "AI Investor Podcast", url: "https://rss.buzzsprout.com/2400102.rss" },
-  { name: "Custom URL", url: "" },
+// Preset options: RSS feeds + direct episode link
+const PRESET_OPTIONS = [
+  { name: "AI Investor Podcast", url: "https://rss.buzzsprout.com/2400102.rss", mode: "rss" as const },
+  { name: "Custom URL", url: "", mode: "rss" as const },
+  { name: "Direct Episode Link", url: "", mode: "direct" as const },
 ];
 
 export default function PodcastRSSNode({ id, data }: PodcastRSSNodeProps) {
-  const [selectedPreset, setSelectedPreset] = useState(0); // Default to AI Investor
-  const [feedUrl, setFeedUrl] = useState(PRESET_FEEDS[0].url);
+  const [selectedPreset, setSelectedPreset] = useState(data.feedUrl ? -1 : 0);
+  const [feedUrl, setFeedUrl] = useState(data.feedUrl || PRESET_OPTIONS[0].url);
+  const [directUrl, setDirectUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [episodes, setEpisodes] = useState<Episode[]>([]);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [feedTitle, setFeedTitle] = useState("");
+  // For direct episode link mode
+  const [episodeTitle, setEpisodeTitle] = useState("");
+  const [episodeAudioUrl, setEpisodeAudioUrl] = useState("");
 
+  const currentMode = selectedPreset >= 0 ? PRESET_OPTIONS[selectedPreset].mode : "rss";
+
+  // Load RSS feed and list episodes
   const handleLoadFeed = async () => {
     if (!feedUrl.trim()) {
       setError("Enter an RSS feed URL first");
@@ -50,11 +59,43 @@ export default function PodcastRSSNode({ id, data }: PodcastRSSNodeProps) {
     setSelectedIndex(null);
 
     try {
+      setDebugContext({ nodeId: id, nodeName: "Podcast" });
       const result = await fetchPodcastRSS(finalUrl);
       setFeedTitle(result.feedTitle);
       setEpisodes(result.episodes);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load feed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Fetch a direct episode link
+  const handleFetchEpisode = async () => {
+    if (!directUrl.trim()) {
+      setError("Enter a podcast episode URL first");
+      return;
+    }
+
+    let finalUrl = directUrl.trim();
+    if (!finalUrl.startsWith("http://") && !finalUrl.startsWith("https://")) {
+      finalUrl = "https://" + finalUrl;
+    }
+
+    setLoading(true);
+    setError("");
+
+    try {
+      setDebugContext({ nodeId: id, nodeName: "Podcast" });
+      const result = await fetchPodcastEpisode(finalUrl);
+      setEpisodeTitle(result.title);
+      setEpisodeAudioUrl(result.audioUrl);
+
+      const outputData = { audioUrl: result.audioUrl, title: result.title };
+      data.updateNodeData?.(id, outputData);
+      data.propagateData?.(id, outputData);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to fetch episode");
     } finally {
       setLoading(false);
     }
@@ -101,10 +142,10 @@ export default function PodcastRSSNode({ id, data }: PodcastRSSNodeProps) {
             fontWeight: 600,
           }}
         >
-          R
+          P
         </div>
         <span style={{ fontSize: "13px", fontWeight: 600, color: "#1d1d1f" }}>
-          Podcast RSS Feed
+          Podcast
         </span>
       </div>
 
@@ -114,7 +155,16 @@ export default function PodcastRSSNode({ id, data }: PodcastRSSNodeProps) {
         onChange={(e) => {
           const idx = Number(e.target.value);
           setSelectedPreset(idx);
-          setFeedUrl(PRESET_FEEDS[idx].url);
+          if (PRESET_OPTIONS[idx].mode === "rss") {
+            setFeedUrl(PRESET_OPTIONS[idx].url);
+          }
+          // Clear previous results when switching mode
+          setEpisodes([]);
+          setSelectedIndex(null);
+          setFeedTitle("");
+          setEpisodeTitle("");
+          setEpisodeAudioUrl("");
+          setError("");
         }}
         style={{
           width: "100%",
@@ -128,15 +178,15 @@ export default function PodcastRSSNode({ id, data }: PodcastRSSNodeProps) {
           background: "#fff",
         }}
       >
-        {PRESET_FEEDS.map((feed, idx) => (
+        {PRESET_OPTIONS.map((option, idx) => (
           <option key={idx} value={idx}>
-            {feed.name}
+            {option.name}
           </option>
         ))}
       </select>
 
-      {/* Custom URL input - only show when Custom is selected */}
-      {selectedPreset === PRESET_FEEDS.length - 1 && (
+      {/* RSS mode: Custom URL input */}
+      {currentMode === "rss" && selectedPreset === 1 && (
         <input
           type="text"
           value={feedUrl}
@@ -156,8 +206,30 @@ export default function PodcastRSSNode({ id, data }: PodcastRSSNodeProps) {
         />
       )}
 
+      {/* Direct episode mode: URL input */}
+      {currentMode === "direct" && (
+        <input
+          type="text"
+          value={directUrl}
+          onChange={(e) => setDirectUrl(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleFetchEpisode()}
+          placeholder="Podcast episode URL..."
+          style={{
+            width: "100%",
+            padding: "10px 12px",
+            borderRadius: "10px",
+            border: "1px solid #e5e5e5",
+            fontSize: "12px",
+            marginBottom: "8px",
+            fontFamily: "inherit",
+            boxSizing: "border-box",
+          }}
+        />
+      )}
+
+      {/* Action button */}
       <button
-        onClick={handleLoadFeed}
+        onClick={currentMode === "direct" ? handleFetchEpisode : handleLoadFeed}
         disabled={loading}
         style={{
           width: "100%",
@@ -181,7 +253,11 @@ export default function PodcastRSSNode({ id, data }: PodcastRSSNodeProps) {
           e.currentTarget.style.transform = "scale(1)";
         }}
       >
-        {loading ? "Loading..." : "Load Feed"}
+        {loading
+          ? "Loading..."
+          : currentMode === "direct"
+            ? "Fetch Episode"
+            : "Load Feed"}
       </button>
 
       {error && (
@@ -199,7 +275,8 @@ export default function PodcastRSSNode({ id, data }: PodcastRSSNodeProps) {
         </div>
       )}
 
-      {feedTitle && episodes.length > 0 && (
+      {/* RSS mode: episode list */}
+      {currentMode === "rss" && feedTitle && episodes.length > 0 && (
         <div style={{ marginTop: "10px" }}>
           <div
             style={{
@@ -238,7 +315,8 @@ export default function PodcastRSSNode({ id, data }: PodcastRSSNodeProps) {
         </div>
       )}
 
-      {selectedIndex !== null && episodes[selectedIndex] && (
+      {/* RSS mode: selected episode info */}
+      {currentMode === "rss" && selectedIndex !== null && episodes[selectedIndex] && (
         <div
           style={{
             marginTop: "10px",
@@ -257,6 +335,29 @@ export default function PodcastRSSNode({ id, data }: PodcastRSSNodeProps) {
           <div style={{ marginTop: "4px", fontSize: "10px", color: "#e67e22" }}>
             Audio URL ready
           </div>
+        </div>
+      )}
+
+      {/* Direct mode: fetched episode info */}
+      {currentMode === "direct" && episodeTitle && !loading && (
+        <div
+          style={{
+            marginTop: "10px",
+            padding: "8px 10px",
+            background: "#fff7ed",
+            borderRadius: "8px",
+            fontSize: "11px",
+            color: "#c2410c",
+            lineHeight: "1.4",
+          }}
+        >
+          <div style={{ fontWeight: 500, marginBottom: "4px" }}>Episode:</div>
+          {episodeTitle.length > 60 ? episodeTitle.slice(0, 60) + "..." : episodeTitle}
+          {episodeAudioUrl && (
+            <div style={{ marginTop: "4px", fontSize: "10px", color: "#e67e22" }}>
+              Audio URL ready
+            </div>
+          )}
         </div>
       )}
 

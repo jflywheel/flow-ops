@@ -3065,6 +3065,167 @@ Respond in this exact JSON format:
         }, { headers: corsHeaders });
       }
 
+      // Chat endpoint - natural language to flow actions via Claude
+      if (path === "/api/chat" && request.method === "POST") {
+        const body = await request.json() as {
+          message?: string;
+          currentNodes?: Array<{ id: string; type: string; position: { x: number; y: number } }>;
+          currentEdges?: Array<{ source: string; target: string }>;
+        };
+
+        if (!body.message) {
+          return Response.json(
+            { error: "Missing message", code: "MISSING_MESSAGE" },
+            { status: 400, headers: corsHeaders }
+          );
+        }
+
+        const anthropicKey = await env.FWP_ANTHROPIC_API_KEY.get();
+
+        // System prompt that teaches Claude about all available nodes and presets
+        const systemPrompt = `You are a helpful assistant for a visual node-based editor called flow-ops. Users describe what they want to build, and you return structured JSON actions to create nodes and connect them.
+
+## Available Node Types
+
+### Source Nodes (inputs that provide data)
+- textInput: Text input box. Fields: { value: "the text" }
+- urlInput: Fetches a URL and extracts article text. Fields: { value: "https://..." }
+- imageUpload: Upload an image. Fields: { imageUrl: "" }
+- audioUpload: Upload audio. Fields: { audioBase64: "", mimeType: "", filename: "" }
+- videoUpload: Upload video. Fields: { videoBase64: "", mimeType: "", filename: "" }
+- pdfUpload: Upload PDF. Fields: { pdfBase64: "", filename: "" }
+- podcastEpisode: Single podcast episode URL. Fields: { audioUrl: "", title: "" }
+- podcastRSS: Podcast RSS feed (parses episodes). Fields: { audioUrl: "", title: "" }
+- stockTicker: Stock market data. Fields: { ticker: "" }
+- reportJSON: Paste raw report JSON. Fields: { report: null }
+
+### Operation Nodes (process data)
+- enhanceText: Rewrites/improves text. Fields: { inputValue: "" }
+- summarize: Summarizes text. Fields: { inputValue: "" }
+- extractKeyPoints: Extracts bullet points. Fields: { inputValue: "" }
+- transcribe: Transcribes audio to text. Fields: { inputValue: "" }
+- iphonePhoto: Generates a photorealistic image from text. Fields: { inputValue: "", extraInstructions: "" }
+- animate: Converts image to video. Fields: { imageUrl: "", inputValue: "" }
+- crop: Crops image/video to aspect ratio. Fields: { imageUrl: "", videoUrl: "" }
+- textOverlay: Adds text on images. Fields: { imageUrl: "", inputValue: "" }
+- generateReport: Creates a structured report from transcript. Fields: { inputValue: "" }
+- generateCopy: Generates ad copy from report. Fields: { inputValue: "" }
+- generateLandingPages: Generates landing pages from report. Fields: { inputValue: "" }
+- generateAdvertorial: Generates advertorial from report. Fields: { inputValue: "" }
+- generateAdvertorialCopy: Generates Meta ad copy from advertorial. Fields: { inputValue: "" }
+- generateVisualConcepts: Generates image concepts from report. Fields: { inputValue: "" }
+- generateMetaHeadlines: Generates Meta ad headlines. Fields: { inputValue: "" }
+- generateYouTubeThumbnails: Generates YouTube thumbnail images. Fields: { inputValue: "" }
+
+### Output Nodes (display results)
+- imageOutput: Shows image or video result. Fields: { imageUrl: "", prompt: "" }
+- reportPreview: Shows formatted report. Fields: { report: null }
+- copyExport: Shows ad copy for export. Fields: { copy: null }
+- landingPagePreview: Shows landing page preview. Fields: { landingPages: null }
+- advertorialPreview: Shows advertorial preview. Fields: { headline: "", content: "" }
+- imageGallery: Shows multiple images. Fields: { images: [] }
+
+### Utility Nodes
+- splitReportSections: Splits report into sections. Fields: { report: null }
+- merge: Merges multiple inputs. Fields: { inputs: [] }
+- filterByAngle: Filters by emotional angle. Fields: { inputValue: null, angle: "fear" }
+- platformToggle: Switches between platforms. Fields: { platform: "google" }
+
+## Available Presets
+1. "Text to Photo" - Text Input > Generate Image > Output
+2. "URL to Photo" - URL Input > Generate Image > Output
+3. "Photo to Video" - Image Upload > Animate > Output
+4. "Text to Video" - Text Input > Generate Image > Animate > Output
+5. "Video for Meta" - Text Input > Generate Image > Animate > Crop > Output
+6. "Podcast to Report" - Podcast RSS > Transcribe > Generate Report > Report Preview
+7. "FWP Pipeline" - Full podcast to ads pipeline
+
+## Response Format
+Return ONLY valid JSON (no markdown, no explanation outside the JSON). The format:
+{
+  "actions": [
+    { "type": "addNode", "nodeType": "textInput", "data": { "value": "some text" }, "label": "Text Input" },
+    { "type": "addNode", "nodeType": "iphonePhoto", "data": {}, "label": "Generate Image" },
+    { "type": "connectNodes", "sourceIndex": 0, "targetIndex": 1 },
+    { "type": "loadPreset", "presetName": "Text to Photo" }
+  ],
+  "reply": "Here is what I set up for you."
+}
+
+## Rules
+- sourceIndex and targetIndex in connectNodes refer to the 0-based index of addNode actions in the SAME response
+- When adding a chain of nodes, connect them in order
+- If the user asks for a preset by name, use loadPreset instead of manually adding nodes
+- If the user provides text content, put it in the data.value field of a textInput node
+- Keep reply short and helpful. Do not use emdashes. Use periods, commas, or colons instead.
+- If you do not understand the request, return an empty actions array and explain in the reply.
+- Always include an output node at the end of a chain when appropriate.`;
+
+        // Call Claude Haiku 4.5
+        const claudeResponse = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "x-api-key": anthropicKey,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "claude-haiku-4-5-20251001",
+            max_tokens: 1024,
+            system: systemPrompt,
+            messages: [
+              {
+                role: "user",
+                content: `Current canvas has ${(body.currentNodes || []).length} nodes and ${(body.currentEdges || []).length} edges.${(body.currentNodes || []).length > 0 ? `\nExisting node types: ${(body.currentNodes || []).map(n => n.type).join(", ")}` : ""}\n\nUser request: ${body.message}`,
+              },
+            ],
+          }),
+        });
+
+        if (!claudeResponse.ok) {
+          const errText = await claudeResponse.text();
+          console.error("Claude API error:", errText);
+          return Response.json(
+            { error: "Failed to get AI response", code: "AI_ERROR" },
+            { status: 500, headers: corsHeaders }
+          );
+        }
+
+        const claudeData = await claudeResponse.json() as {
+          content?: Array<{ type: string; text?: string }>;
+        };
+
+        const responseText = claudeData.content?.[0]?.text || "";
+
+        // Parse JSON from AI response (handle markdown code blocks and extra text)
+        let jsonStr = responseText;
+
+        const codeBlockMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
+        if (codeBlockMatch) {
+          jsonStr = codeBlockMatch[1].trim();
+        }
+
+        const jsonObjMatch = jsonStr.match(/\{[\s\S]*\}/);
+        if (jsonObjMatch) {
+          jsonStr = jsonObjMatch[0];
+        }
+
+        try {
+          const result = JSON.parse(jsonStr);
+          return Response.json(result, { headers: corsHeaders });
+        } catch {
+          console.error("Failed to parse chat JSON:", responseText.slice(0, 500));
+          // Return the raw text as a reply if JSON parsing fails
+          return Response.json(
+            {
+              actions: [],
+              reply: "I had trouble processing that. Could you try rephrasing your request?",
+            },
+            { headers: corsHeaders }
+          );
+        }
+      }
+
       // 404 for unknown routes
       return Response.json(
         { error: "Not found", code: "NOT_FOUND" },

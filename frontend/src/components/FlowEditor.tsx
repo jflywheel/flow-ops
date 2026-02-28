@@ -1,4 +1,4 @@
-import { useCallback, useRef, useEffect } from "react";
+import { useCallback, useRef, useEffect, useState } from "react";
 import {
   ReactFlow,
   Controls,
@@ -12,7 +12,11 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
-// Selected edge styling - makes it clear what will be deleted
+// Debug panel for inspecting API calls
+import DebugPanel from "./DebugPanel";
+import { subscribe as subscribeDebug, getEntryCount } from "../debugLog";
+
+// Selected edge styling + sidebar tooltip styling
 const edgeStyles = `
   .react-flow__edge.selected .react-flow__edge-path {
     stroke: #ef4444 !important;
@@ -20,6 +24,50 @@ const edgeStyles = `
   }
   .react-flow__edge:hover .react-flow__edge-path {
     stroke: #f97316 !important;
+  }
+
+  /* Sidebar tooltip - rendered as fixed-position overlay via JS */
+  .sidebar-tooltip-portal {
+    position: fixed;
+    background: #1d1d1f;
+    color: #fff;
+    padding: 10px 12px;
+    border-radius: 10px;
+    font-size: 11px;
+    line-height: 1.45;
+    width: 200px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+    z-index: 9999;
+    pointer-events: none;
+    animation: sidebarTTFadeIn 0.15s ease-out both;
+  }
+  .sidebar-tooltip-portal::before {
+    content: "";
+    position: absolute;
+    right: 100%;
+    top: 50%;
+    transform: translateY(-50%);
+    border: 5px solid transparent;
+    border-right-color: #1d1d1f;
+  }
+  @keyframes sidebarTTFadeIn {
+    from { opacity: 0; transform: translateX(-4px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+  .sidebar-tooltip-portal .tt-desc {
+    margin-bottom: 6px;
+    color: #e5e5ea;
+  }
+  .sidebar-tooltip-portal .tt-row {
+    display: flex;
+    gap: 4px;
+  }
+  .sidebar-tooltip-portal .tt-label {
+    color: #86868b;
+    flex-shrink: 0;
+  }
+  .sidebar-tooltip-portal .tt-value {
+    color: #fff;
   }
 `;
 
@@ -66,6 +114,12 @@ import SplitReportSectionsNode from "./nodes/SplitReportSectionsNode";
 import MergeNode from "./nodes/MergeNode";
 import FilterByAngleNode from "./nodes/FilterByAngleNode";
 import PlatformToggleNode from "./nodes/PlatformToggleNode";
+
+// Chat panel for natural language flow building
+import ChatPanel from "./ChatPanel";
+
+// Self-test runner
+import SelfTest from "./SelfTest";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const nodeTypes: Record<string, any> = {
@@ -235,57 +289,109 @@ const presetFlows: PresetFlow[] = [
   },
 ];
 
-// Sidebar items
-const sources = [
-  { type: "textInput", label: "Text Input", icon: "T", color: "#0071e3" },
-  { type: "urlInput", label: "URL Input", icon: "U", color: "#0071e3" },
-  { type: "imageUpload", label: "Image Upload", icon: "I", color: "#0071e3" },
-  { type: "audioUpload", label: "Audio Upload", icon: "A", color: "#3498db" },
-  { type: "videoUpload", label: "Video Upload", icon: "V", color: "#e74c3c" },
-  { type: "pdfUpload", label: "PDF Upload", icon: "P", color: "#c0392b" },
-  { type: "podcastEpisode", label: "Podcast Episode", icon: "E", color: "#9b59b6" },
-  { type: "podcastRSS", label: "Podcast RSS", icon: "R", color: "#e67e22" },
-  { type: "stockTicker", label: "Stock Ticker", icon: "$", color: "#27ae60" },
-  { type: "reportJSON", label: "Report JSON", icon: "J", color: "#8e44ad" },
+// Tooltip info for sidebar items
+interface TooltipInfo {
+  description: string;
+  inputType: string;
+  outputType: string;
+}
+
+// Sidebar items with tooltip metadata
+interface SidebarItem {
+  type: string;
+  label: string;
+  icon: string;
+  color?: string;
+  gradient?: string;
+  tooltip: TooltipInfo;
+}
+
+const sources: SidebarItem[] = [
+  { type: "textInput", label: "Text Input", icon: "T", color: "#0071e3",
+    tooltip: { description: "Type or paste text directly.", inputType: "None (manual entry)", outputType: "Text" } },
+  { type: "urlInput", label: "URL Input", icon: "U", color: "#0071e3",
+    tooltip: { description: "Fetches a URL and extracts the article text using AI.", inputType: "None (enter URL)", outputType: "Text" } },
+  { type: "imageUpload", label: "Image Upload", icon: "I", color: "#0071e3",
+    tooltip: { description: "Upload an image file from your device.", inputType: "None (file picker)", outputType: "Image" } },
+  { type: "audioUpload", label: "Audio Upload", icon: "A", color: "#3498db",
+    tooltip: { description: "Upload an MP3, M4A, or WAV audio file.", inputType: "None (file picker)", outputType: "Audio (base64)" } },
+  { type: "videoUpload", label: "Video Upload", icon: "V", color: "#e74c3c",
+    tooltip: { description: "Upload an MP4, MOV, or WebM video file.", inputType: "None (file picker)", outputType: "Video (base64)" } },
+  { type: "pdfUpload", label: "PDF Upload", icon: "P", color: "#c0392b",
+    tooltip: { description: "Upload a PDF document.", inputType: "None (file picker)", outputType: "PDF (base64)" } },
+  { type: "podcastEpisode", label: "Podcast Episode", icon: "E", color: "#9b59b6",
+    tooltip: { description: "Fetch a podcast episode by URL to get its audio.", inputType: "None (enter URL)", outputType: "Audio URL" } },
+  { type: "podcastRSS", label: "Podcast RSS", icon: "R", color: "#e67e22",
+    tooltip: { description: "Load an RSS feed and pick an episode.", inputType: "None (enter RSS URL)", outputType: "Audio URL" } },
+  { type: "stockTicker", label: "Stock Ticker", icon: "$", color: "#27ae60",
+    tooltip: { description: "Look up stock price and fundamentals by ticker symbol.", inputType: "None (enter ticker)", outputType: "Stock data (JSON)" } },
+  { type: "reportJSON", label: "Report JSON", icon: "J", color: "#8e44ad",
+    tooltip: { description: "Paste or upload a report JSON file.", inputType: "None (paste/upload)", outputType: "Report JSON" } },
 ];
 
-const operations = [
+const operations: SidebarItem[] = [
   // Text processing
-  { type: "enhanceText", label: "Enhance Text", icon: "E", gradient: "linear-gradient(135deg, #f59e0b 0%, #ef4444 100%)" },
-  { type: "summarize", label: "Summarize", icon: "S", gradient: "linear-gradient(135deg, #f97316 0%, #ea580c 100%)" },
-  { type: "extractKeyPoints", label: "Key Points", icon: "K", gradient: "linear-gradient(135deg, #10b981 0%, #059669 100%)" },
+  { type: "enhanceText", label: "Enhance Text", icon: "E", gradient: "linear-gradient(135deg, #f59e0b 0%, #ef4444 100%)",
+    tooltip: { description: "Rewrites and improves text using AI.", inputType: "Text", outputType: "Text" } },
+  { type: "summarize", label: "Summarize Text", icon: "S", gradient: "linear-gradient(135deg, #f97316 0%, #ea580c 100%)",
+    tooltip: { description: "Condenses text to a shorter summary.", inputType: "Text or Report JSON", outputType: "Text" } },
+  { type: "extractKeyPoints", label: "Key Points", icon: "K", gradient: "linear-gradient(135deg, #10b981 0%, #059669 100%)",
+    tooltip: { description: "Pulls out the main bullet points from text.", inputType: "Text or Report JSON", outputType: "Bullet list (text)" } },
   // Audio/Video
-  { type: "transcribe", label: "Transcribe", icon: "T", gradient: "linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)" },
-  { type: "animate", label: "Animate", icon: "A", gradient: "linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%)" },
-  { type: "crop", label: "Crop", icon: "C", gradient: "linear-gradient(135deg, #f59e0b 0%, #d97706 100%)" },
+  { type: "transcribe", label: "Transcribe Audio", icon: "T", gradient: "linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)",
+    tooltip: { description: "Converts audio to text with speaker labels.", inputType: "Audio URL or audio file", outputType: "Transcript (text)" } },
+  { type: "animate", label: "Image to Video", icon: "A", gradient: "linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%)",
+    tooltip: { description: "Animates a still image into a short video using Veo.", inputType: "Image", outputType: "Video" } },
+  { type: "crop", label: "Crop Image/Video", icon: "C", gradient: "linear-gradient(135deg, #f59e0b 0%, #d97706 100%)",
+    tooltip: { description: "Crops to a target aspect ratio (4:5, 1:1, 16:9, 9:16).", inputType: "Image or Video", outputType: "Image or Video" } },
   // Report pipeline
-  { type: "generateReport", label: "Generate Report", icon: "R", gradient: "linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%)" },
-  { type: "generateCopy", label: "Generate Copy", icon: "C", gradient: "linear-gradient(135deg, #ec4899 0%, #be185d 100%)" },
-  { type: "generateLandingPages", label: "Landing Pages", icon: "L", gradient: "linear-gradient(135deg, #10b981 0%, #047857 100%)" },
-  { type: "generateAdvertorial", label: "Advertorial", icon: "A", gradient: "linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%)" },
-  { type: "generateAdvertorialCopy", label: "Advertorial Copy", icon: "C", gradient: "linear-gradient(135deg, #ec4899 0%, #f43f5e 100%)" },
-  { type: "generateMetaHeadlines", label: "Meta Headlines", icon: "M", gradient: "linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)" },
-  { type: "generateYouTubeThumbnails", label: "YT Thumbnails", icon: "▶", gradient: "linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)" },
+  { type: "generateReport", label: "Generate Report", icon: "R", gradient: "linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%)",
+    tooltip: { description: "Creates a structured report from a transcript or text.", inputType: "Text or Transcript", outputType: "Report JSON" } },
+  { type: "generateCopy", label: "Generate Ad Copy", icon: "C", gradient: "linear-gradient(135deg, #ec4899 0%, #be185d 100%)",
+    tooltip: { description: "Generates ad copy variants (fear, greed, curiosity, urgency).", inputType: "Report JSON", outputType: "Ad copy (JSON)" } },
+  { type: "generateLandingPages", label: "Landing Pages", icon: "L", gradient: "linear-gradient(135deg, #10b981 0%, #047857 100%)",
+    tooltip: { description: "Creates landing page content for each angle.", inputType: "Report JSON", outputType: "Landing pages (JSON)" } },
+  { type: "generateAdvertorial", label: "Advertorial Article", icon: "A", gradient: "linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%)",
+    tooltip: { description: "Writes a long-form advertorial article from a report.", inputType: "Report JSON", outputType: "HTML article" } },
+  { type: "generateAdvertorialCopy", label: "Advertorial Ad Copy", icon: "C", gradient: "linear-gradient(135deg, #ec4899 0%, #f43f5e 100%)",
+    tooltip: { description: "Creates Meta ad copy to promote an advertorial.", inputType: "Advertorial HTML", outputType: "Ad copy (JSON)" } },
+  { type: "generateMetaHeadlines", label: "Meta Ad Headlines", icon: "M", gradient: "linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)",
+    tooltip: { description: "Generates 5 primary texts and 5 headlines for Meta ads.", inputType: "Text or Transcript", outputType: "Headlines + texts" } },
+  { type: "generateYouTubeThumbnails", label: "YT Thumbnails", icon: "\u25b6", gradient: "linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)",
+    tooltip: { description: "Generates 5 YouTube thumbnail images from a transcript.", inputType: "Transcript + reference photo", outputType: "5 thumbnail images" } },
   // Image generation
-  { type: "generateVisualConcepts", label: "Visual Concepts", icon: "V", gradient: "linear-gradient(135deg, #14b8a6 0%, #0d9488 100%)" },
-  { type: "iphonePhoto", label: "Generate Image", icon: "I", gradient: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)" },
-  { type: "textOverlay", label: "Text Overlay", icon: "T", gradient: "linear-gradient(135deg, #ec4899 0%, #f97316 100%)" },
+  { type: "generateVisualConcepts", label: "Visual Concepts", icon: "V", gradient: "linear-gradient(135deg, #14b8a6 0%, #0d9488 100%)",
+    tooltip: { description: "Creates visual concept descriptions for image generation.", inputType: "Report JSON or text", outputType: "Concept list (JSON)" } },
+  { type: "iphonePhoto", label: "Generate Image", icon: "I", gradient: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+    tooltip: { description: "Generates a photorealistic image from text using Gemini.", inputType: "Text or visual concept", outputType: "Image" } },
+  { type: "textOverlay", label: "Text on Image", icon: "T", gradient: "linear-gradient(135deg, #ec4899 0%, #f97316 100%)",
+    tooltip: { description: "Adds text overlay on top of an image.", inputType: "Image", outputType: "Image" } },
 ];
 
-const outputs = [
-  { type: "imageOutput", label: "Output", icon: "O", gradient: "linear-gradient(135deg, #11998e 0%, #38ef7d 100%)" },
-  { type: "reportPreview", label: "Report Preview", icon: "R", gradient: "linear-gradient(135deg, #8b5cf6 0%, #a855f7 100%)" },
-  { type: "copyExport", label: "Copy Export", icon: "E", gradient: "linear-gradient(135deg, #ec4899 0%, #f472b6 100%)" },
-  { type: "landingPagePreview", label: "Landing Preview", icon: "L", gradient: "linear-gradient(135deg, #06b6d4 0%, #22d3ee 100%)" },
-  { type: "advertorialPreview", label: "Advertorial Preview", icon: "A", gradient: "linear-gradient(135deg, #f97316 0%, #fb923c 100%)" },
-  { type: "imageGallery", label: "Image Gallery", icon: "G", gradient: "linear-gradient(135deg, #14b8a6 0%, #2dd4bf 100%)" },
+const outputs: SidebarItem[] = [
+  { type: "imageOutput", label: "Media Output", icon: "O", gradient: "linear-gradient(135deg, #11998e 0%, #38ef7d 100%)",
+    tooltip: { description: "Displays an image or video result.", inputType: "Image, Video, or Text", outputType: "Display only" } },
+  { type: "reportPreview", label: "Report Preview", icon: "R", gradient: "linear-gradient(135deg, #8b5cf6 0%, #a855f7 100%)",
+    tooltip: { description: "Renders a formatted preview of a report.", inputType: "Report JSON", outputType: "Display only" } },
+  { type: "copyExport", label: "Copy Export", icon: "E", gradient: "linear-gradient(135deg, #ec4899 0%, #f472b6 100%)",
+    tooltip: { description: "Shows ad copy variants with a copy-to-clipboard button.", inputType: "Ad copy (JSON)", outputType: "Display only" } },
+  { type: "landingPagePreview", label: "Landing Preview", icon: "L", gradient: "linear-gradient(135deg, #06b6d4 0%, #22d3ee 100%)",
+    tooltip: { description: "Previews landing page content by angle.", inputType: "Landing pages (JSON)", outputType: "Display only" } },
+  { type: "advertorialPreview", label: "Advertorial Preview", icon: "A", gradient: "linear-gradient(135deg, #f97316 0%, #fb923c 100%)",
+    tooltip: { description: "Renders an advertorial article preview.", inputType: "Advertorial HTML", outputType: "Display only" } },
+  { type: "imageGallery", label: "Image Gallery", icon: "G", gradient: "linear-gradient(135deg, #14b8a6 0%, #2dd4bf 100%)",
+    tooltip: { description: "Shows a grid of generated images with download.", inputType: "Image array", outputType: "Display only" } },
 ];
 
-const utilities = [
-  { type: "splitReportSections", label: "Split Sections", icon: "S", gradient: "linear-gradient(135deg, #6366f1 0%, #818cf8 100%)" },
-  { type: "merge", label: "Merge", icon: "M", gradient: "linear-gradient(135deg, #10b981 0%, #34d399 100%)" },
-  { type: "filterByAngle", label: "Filter Angle", icon: "F", gradient: "linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)" },
-  { type: "platformToggle", label: "Platform", icon: "P", gradient: "linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%)" },
+const utilities: SidebarItem[] = [
+  { type: "splitReportSections", label: "Split Sections", icon: "S", gradient: "linear-gradient(135deg, #6366f1 0%, #818cf8 100%)",
+    tooltip: { description: "Splits a report into individual section outputs.", inputType: "Report JSON", outputType: "One output per section" } },
+  { type: "merge", label: "Merge Data", icon: "M", gradient: "linear-gradient(135deg, #10b981 0%, #34d399 100%)",
+    tooltip: { description: "Combines up to 4 inputs into a single array.", inputType: "Any (up to 4 inputs)", outputType: "Merged array (JSON)" } },
+  { type: "filterByAngle", label: "Filter by Angle", icon: "F", gradient: "linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)",
+    tooltip: { description: "Picks one angle (fear, greed, curiosity, urgency) from copy data.", inputType: "Ad copy or landing pages", outputType: "Single angle data" } },
+  { type: "platformToggle", label: "Platform Toggle", icon: "P", gradient: "linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%)",
+    tooltip: { description: "Switches between Google and Meta ad platforms.", inputType: "None (toggle)", outputType: "Platform setting" } },
 ];
 
 // localStorage keys
@@ -311,6 +417,32 @@ function loadFromStorage(): { nodes: Node[]; edges: Edge[]; counter: number } {
 }
 
 export default function FlowEditor() {
+  // Tooltip state for sidebar items (uses fixed positioning to escape overflow)
+  const [activeTooltip, setActiveTooltip] = useState<{
+    tooltip: TooltipInfo;
+    x: number;
+    y: number;
+  } | null>(null);
+  const tooltipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showTooltip = (e: React.MouseEvent, tooltip: TooltipInfo) => {
+    if (tooltipTimerRef.current) clearTimeout(tooltipTimerRef.current);
+    const rect = e.currentTarget.getBoundingClientRect();
+    // 200ms delay before showing
+    tooltipTimerRef.current = setTimeout(() => {
+      setActiveTooltip({
+        tooltip,
+        x: rect.right + 8,
+        y: rect.top + rect.height / 2,
+      });
+    }, 200);
+  };
+
+  const hideTooltip = () => {
+    if (tooltipTimerRef.current) clearTimeout(tooltipTimerRef.current);
+    setActiveTooltip(null);
+  };
+
   // Load initial state from localStorage
   const initialState = useRef(loadFromStorage());
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(initialState.current.nodes);
@@ -323,6 +455,18 @@ export default function FlowEditor() {
   } | null>(null);
   // Track when we need to fitView (after loading a preset)
   const shouldFitView = useRef(false);
+
+  // Debug panel state
+  const [debugOpen, setDebugOpen] = useState(false);
+  const [debugCount, setDebugCount] = useState(0);
+  // Subscribe to debug log changes to update the badge count
+  useEffect(() => {
+    setDebugCount(getEntryCount());
+    const unsubscribe = subscribeDebug(() => {
+      setDebugCount(getEntryCount());
+    });
+    return unsubscribe;
+  }, []);
 
   // Save to localStorage when nodes/edges change (debounced)
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -621,9 +765,141 @@ export default function FlowEditor() {
     event.dataTransfer.dropEffect = "move";
   };
 
+
+  // Chat panel callbacks: add a node at a smart position and return its ID
+  const chatAddNode = useCallback(
+    (nodeType: string, data: Record<string, unknown>): string => {
+      const id = `${nodeType}-${nodeIdCounter.current++}`;
+
+      // Place new nodes to the right of existing ones, staggered vertically
+      const currentNodes = nodesRef.current;
+      let x = 100;
+      let y = 200;
+      if (currentNodes.length > 0) {
+        const maxX = Math.max(...currentNodes.map((n) => n.position.x));
+        x = maxX + 300;
+        const nodesAtSimilarX = currentNodes.filter(
+          (n) => Math.abs(n.position.x - x) < 50
+        );
+        y = 200 + nodesAtSimilarX.length * 100;
+      }
+
+      // Merge provided data on top of default initial data for this type
+      const initialData = getInitialData(nodeType);
+      const mergedData = { ...initialData, ...data };
+
+      const newNode: Node = {
+        id,
+        type: nodeType,
+        position: { x, y },
+        data: mergedData,
+      };
+
+      setNodes((nds) => [...nds, newNode]);
+      return id;
+    },
+    [setNodes]
+  );
+
+  // Chat panel callback: add an edge between two nodes
+  const chatAddEdge = useCallback(
+    (sourceId: string, targetId: string) => {
+      const edgeId = `e-${sourceId}-${targetId}`;
+      setEdges((eds) => [
+        ...eds,
+        { id: edgeId, source: sourceId, target: targetId, type: "smoothstep" },
+      ]);
+    },
+    [setEdges]
+  );
+
+  // Chat panel callback: load a preset by name
+  const chatLoadPreset = useCallback(
+    (presetName: string) => {
+      const preset = presetFlows.find(
+        (p) => p.name.toLowerCase() === presetName.toLowerCase()
+      );
+      if (preset) {
+        loadPreset(preset);
+      }
+    },
+    [loadPreset]
+  );
+
+  // Renders a single sidebar item with a hover tooltip
+  const renderSidebarItem = (item: SidebarItem) => (
+    <div
+      key={item.type}
+      draggable
+      onDragStart={(e) => {
+        onDragStart(e, item.type);
+        hideTooltip(); // Hide tooltip when dragging starts
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = "#e8e8ed";
+        showTooltip(e, item.tooltip);
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = "#f5f5f7";
+        hideTooltip();
+      }}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: "12px",
+        padding: "8px 10px",
+        background: "#f5f5f7",
+        borderRadius: "10px",
+        marginBottom: "4px",
+        cursor: "grab",
+        transition: "background 0.15s",
+      }}
+    >
+      <div
+        style={{
+          width: "26px",
+          height: "26px",
+          borderRadius: "6px",
+          background: item.gradient || item.color || "#0071e3",
+          color: "#fff",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontSize: "12px",
+          fontWeight: 600,
+        }}
+      >
+        {item.icon}
+      </div>
+      <span style={{ fontSize: "12px", fontWeight: 500 }}>{item.label}</span>
+    </div>
+  );
+
   return (
     <div style={{ display: "flex", width: "100%", height: "100%" }}>
       <style>{edgeStyles}</style>
+      {/* Fixed-position tooltip portal, rendered outside sidebar overflow */}
+      {activeTooltip && (
+        <div
+          className="sidebar-tooltip-portal"
+          style={{
+            left: activeTooltip.x,
+            top: activeTooltip.y,
+            transform: "translateY(-50%)",
+          }}
+        >
+          <div className="tt-desc">{activeTooltip.tooltip.description}</div>
+          <div className="tt-row">
+            <span className="tt-label">In:</span>
+            <span className="tt-value">{activeTooltip.tooltip.inputType}</span>
+          </div>
+          <div className="tt-row">
+            <span className="tt-label">Out:</span>
+            <span className="tt-value">{activeTooltip.tooltip.outputType}</span>
+          </div>
+        </div>
+      )}
+
       {/* Sidebar */}
       <div
         style={{
@@ -692,48 +968,7 @@ export default function FlowEditor() {
           >
             Sources
           </h3>
-          {sources.map((item) => (
-            <div
-              key={item.type}
-              draggable
-              onDragStart={(e) => onDragStart(e, item.type)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "12px",
-                padding: "8px 10px",
-                background: "#f5f5f7",
-                borderRadius: "10px",
-                marginBottom: "4px",
-                cursor: "grab",
-                transition: "background 0.15s",
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = "#e8e8ed";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = "#f5f5f7";
-              }}
-            >
-              <div
-                style={{
-                  width: "26px",
-                  height: "26px",
-                  borderRadius: "6px",
-                  background: item.color,
-                  color: "#fff",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: "12px",
-                  fontWeight: 600,
-                }}
-              >
-                {item.icon}
-              </div>
-              <span style={{ fontSize: "12px", fontWeight: 500 }}>{item.label}</span>
-            </div>
-          ))}
+          {sources.map(renderSidebarItem)}
         </div>
 
         <div style={{ marginBottom: "24px" }}>
@@ -749,48 +984,7 @@ export default function FlowEditor() {
           >
             Operations
           </h3>
-          {operations.map((item) => (
-            <div
-              key={item.type}
-              draggable
-              onDragStart={(e) => onDragStart(e, item.type)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "12px",
-                padding: "8px 10px",
-                background: "#f5f5f7",
-                borderRadius: "10px",
-                marginBottom: "4px",
-                cursor: "grab",
-                transition: "background 0.15s",
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = "#e8e8ed";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = "#f5f5f7";
-              }}
-            >
-              <div
-                style={{
-                  width: "26px",
-                  height: "26px",
-                  borderRadius: "6px",
-                  background: item.gradient,
-                  color: "#fff",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: "12px",
-                  fontWeight: 600,
-                }}
-              >
-                {item.icon}
-              </div>
-              <span style={{ fontSize: "12px", fontWeight: 500 }}>{item.label}</span>
-            </div>
-          ))}
+          {operations.map(renderSidebarItem)}
         </div>
 
         <div style={{ marginBottom: "16px" }}>
@@ -806,48 +1000,7 @@ export default function FlowEditor() {
           >
             Outputs
           </h3>
-          {outputs.map((item) => (
-            <div
-              key={item.type}
-              draggable
-              onDragStart={(e) => onDragStart(e, item.type)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "12px",
-                padding: "8px 10px",
-                background: "#f5f5f7",
-                borderRadius: "10px",
-                marginBottom: "4px",
-                cursor: "grab",
-                transition: "background 0.15s",
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = "#e8e8ed";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = "#f5f5f7";
-              }}
-            >
-              <div
-                style={{
-                  width: "26px",
-                  height: "26px",
-                  borderRadius: "6px",
-                  background: item.gradient,
-                  color: "#fff",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: "12px",
-                  fontWeight: 600,
-                }}
-              >
-                {item.icon}
-              </div>
-              <span style={{ fontSize: "12px", fontWeight: 500 }}>{item.label}</span>
-            </div>
-          ))}
+          {outputs.map(renderSidebarItem)}
         </div>
 
         <div style={{ marginBottom: "16px" }}>
@@ -863,48 +1016,7 @@ export default function FlowEditor() {
           >
             Utilities
           </h3>
-          {utilities.map((item) => (
-            <div
-              key={item.type}
-              draggable
-              onDragStart={(e) => onDragStart(e, item.type)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "12px",
-                padding: "8px 10px",
-                background: "#f5f5f7",
-                borderRadius: "10px",
-                marginBottom: "4px",
-                cursor: "grab",
-                transition: "background 0.15s",
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = "#e8e8ed";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = "#f5f5f7";
-              }}
-            >
-              <div
-                style={{
-                  width: "26px",
-                  height: "26px",
-                  borderRadius: "6px",
-                  background: item.gradient,
-                  color: "#fff",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: "12px",
-                  fontWeight: 600,
-                }}
-              >
-                {item.icon}
-              </div>
-              <span style={{ fontSize: "12px", fontWeight: 500 }}>{item.label}</span>
-            </div>
-          ))}
+          {utilities.map(renderSidebarItem)}
         </div>
 
         <div style={{ marginTop: "auto", paddingTop: "24px", borderTop: "1px solid #e5e5e5" }}>
@@ -989,6 +1101,88 @@ export default function FlowEditor() {
           <Background color="#e5e5e5" gap={24} size={1} />
         </ReactFlow>
       </div>
+
+      {/* Chat panel for natural language flow building */}
+      <ChatPanel
+        nodes={nodes}
+        edges={edges}
+        onAddNode={chatAddNode}
+        onAddEdge={chatAddEdge}
+        onLoadPreset={chatLoadPreset}
+      />
+
+      {/* Debug panel toggle button (top-right of canvas) */}
+      <button
+        onClick={() => setDebugOpen(!debugOpen)}
+        title="Toggle debug panel"
+        style={{
+          position: "fixed",
+          top: 12,
+          right: 12,
+          width: 36,
+          height: 36,
+          borderRadius: 8,
+          border: "1px solid #e5e5e5",
+          background: debugOpen ? "#6366f1" : "#fff",
+          color: debugOpen ? "#fff" : "#86868b",
+          fontSize: 16,
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          zIndex: 998,
+          boxShadow: "0 1px 4px rgba(0,0,0,0.08)",
+          transition: "all 0.15s",
+        }}
+      >
+        {/* Bug icon (simple SVG) */}
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M8 2l1.88 1.88" />
+          <path d="M14.12 3.88L16 2" />
+          <path d="M9 7.13v-1a3.003 3.003 0 116 0v1" />
+          <path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 014-4h4a4 4 0 014 4v3c0 3.3-2.7 6-6 6" />
+          <path d="M12 20v-9" />
+          <path d="M6.53 9C4.6 8.8 3 7.1 3 5" />
+          <path d="M6 13H2" />
+          <path d="M3 21c0-2.1 1.7-3.9 3.8-4" />
+          <path d="M20.97 5c0 2.1-1.6 3.8-3.5 4" />
+          <path d="M22 13h-4" />
+          <path d="M17.2 17c2.1.1 3.8 1.9 3.8 4" />
+        </svg>
+        {/* Badge showing entry count */}
+        {debugCount > 0 && (
+          <span
+            style={{
+              position: "absolute",
+              top: -4,
+              right: -4,
+              fontSize: 9,
+              fontWeight: 700,
+              color: "#fff",
+              background: "#ef4444",
+              borderRadius: 8,
+              padding: "1px 4px",
+              minWidth: 14,
+              textAlign: "center",
+              lineHeight: "14px",
+            }}
+          >
+            {debugCount > 99 ? "99+" : debugCount}
+          </span>
+        )}
+      </button>
+
+      {/* Debug panel (slides in from right) */}
+      <DebugPanel isOpen={debugOpen} onClose={() => setDebugOpen(false)} />
+
+      {/* Self-test runner (gear icon in bottom-right corner) */}
+      <SelfTest
+        nodes={nodes}
+        edges={edges}
+        setNodes={setNodes}
+        setEdges={setEdges}
+        presetFlows={presetFlows}
+      />
     </div>
   );
 }

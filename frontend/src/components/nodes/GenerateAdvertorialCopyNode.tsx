@@ -1,6 +1,6 @@
 import { Handle, Position } from "@xyflow/react";
 import { useState } from "react";
-import { generateAdvertorialCopy } from "../../api";
+import { generateAdvertorialCopy, setDebugContext } from "../../api";
 
 // Ad copy angle structure from fwp-meta-advertorial
 interface AdAngle {
@@ -63,6 +63,7 @@ export default function GenerateAdvertorialCopyNode({ id, data }: GenerateAdvert
     setDone(false);
 
     try {
+      setDebugContext({ nodeId: id, nodeName: "Advertorial Copy" });
       const result = await generateAdvertorialCopy(content);
       setAdCopy(result);
       setDone(true);

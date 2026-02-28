@@ -1,6 +1,6 @@
 import { Handle, Position } from "@xyflow/react";
 import { useState } from "react";
-import { summarize } from "../../api";
+import { summarize, setDebugContext } from "../../api";
 import ContentModal from "../ContentModal";
 
 interface SummarizeNodeProps {
@@ -59,6 +59,7 @@ export default function SummarizeNode({ id, data }: SummarizeNodeProps) {
     setDone(false);
 
     try {
+      setDebugContext({ nodeId: id, nodeName: "Summarize" });
       const result = await summarize(inputText, maxLength);
       setSummary(result.summary);
       setDone(true);

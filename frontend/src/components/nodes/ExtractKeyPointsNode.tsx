@@ -1,6 +1,6 @@
 import { Handle, Position } from "@xyflow/react";
 import { useState } from "react";
-import { extractKeyPoints } from "../../api";
+import { extractKeyPoints, setDebugContext } from "../../api";
 import ContentModal from "../ContentModal";
 
 interface ExtractKeyPointsNodeProps {
@@ -74,6 +74,7 @@ export default function ExtractKeyPointsNode({ id, data }: ExtractKeyPointsNodeP
     setDone(false);
 
     try {
+      setDebugContext({ nodeId: id, nodeName: "Key Points" });
       const result = await extractKeyPoints(inputText, maxPoints);
       setPoints(result.points);
       setDone(true);

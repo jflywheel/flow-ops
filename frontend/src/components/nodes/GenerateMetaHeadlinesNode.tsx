@@ -1,7 +1,7 @@
 import { Handle, Position } from "@xyflow/react";
 import { useState } from "react";
 import { createPortal } from "react-dom";
-import { generateMetaHeadlines } from "../../api";
+import { generateMetaHeadlines, setDebugContext } from "../../api";
 
 interface GenerateMetaHeadlinesNodeProps {
   id: string;
@@ -126,6 +126,7 @@ export default function GenerateMetaHeadlinesNode({ id, data }: GenerateMetaHead
     setDone(false);
 
     try {
+      setDebugContext({ nodeId: id, nodeName: "Meta Headlines" });
       const result = await generateMetaHeadlines(inputText);
 
       setPrimaryTexts(result.primaryTexts);

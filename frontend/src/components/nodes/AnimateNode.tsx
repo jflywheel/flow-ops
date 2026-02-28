@@ -1,6 +1,6 @@
 import { Handle, Position } from "@xyflow/react";
 import { useState } from "react";
-import { animateImage } from "../../api";
+import { animateImage, setDebugContext } from "../../api";
 
 interface AnimateNodeProps {
   id: string;
@@ -37,6 +37,7 @@ export default function AnimateNode({ id, data }: AnimateNodeProps) {
 
     try {
       const prompt = extraInstructions || "Animate with natural, subtle motion";
+      setDebugContext({ nodeId: id, nodeName: "Animate" });
       const result = await animateImage(imageUrl, prompt, aspectRatio, duration, model);
       setVideoUrl(result);
       data.updateNodeData?.(id, { videoUrl: result });

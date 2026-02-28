@@ -1,6 +1,6 @@
 import { Handle, Position } from "@xyflow/react";
 import { useState } from "react";
-import { generateReport } from "../../api";
+import { generateReport, setDebugContext } from "../../api";
 import ContentModal from "../ContentModal";
 
 interface ReportOutput {
@@ -45,6 +45,7 @@ export default function GenerateReportNode({ id, data }: GenerateReportNodeProps
     setError("");
 
     try {
+      setDebugContext({ nodeId: id, nodeName: "Generate Report" });
       const result = await generateReport(inputText, episodeTitle);
       setReport(result);
       data.updateNodeData?.(id, { report: result });

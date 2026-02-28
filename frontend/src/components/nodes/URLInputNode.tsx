@@ -1,6 +1,6 @@
 import { Handle, Position } from "@xyflow/react";
 import { useState } from "react";
-import { fetchURL } from "../../api";
+import { fetchURL, setDebugContext } from "../../api";
 import ContentModal from "../ContentModal";
 
 interface URLInputNodeProps {
@@ -14,7 +14,7 @@ interface URLInputNodeProps {
 }
 
 export default function URLInputNode({ id, data }: URLInputNodeProps) {
-  const [url, setUrl] = useState("");
+  const [url, setUrl] = useState(data.value || "");
   const [instructions, setInstructions] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -38,6 +38,7 @@ export default function URLInputNode({ id, data }: URLInputNodeProps) {
     setError("");
 
     try {
+      setDebugContext({ nodeId: id, nodeName: "URL Input" });
       const result = await fetchURL(finalUrl, instructions || undefined);
       setArticleText(result);
       data.updateNodeData?.(id, { value: result, articleText: result });

@@ -1,6 +1,6 @@
 import { Handle, Position } from "@xyflow/react";
 import { useState } from "react";
-import { generateLandingPages } from "../../api";
+import { generateLandingPages, setDebugContext } from "../../api";
 import ContentModal from "../ContentModal";
 
 interface LandingPage {
@@ -55,6 +55,7 @@ export default function GenerateLandingPagesNode({ id, data }: GenerateLandingPa
     setError("");
 
     try {
+      setDebugContext({ nodeId: id, nodeName: "Landing Pages" });
       const result = await generateLandingPages(report, mode);
       setLandingPages(result);
       data.updateNodeData?.(id, { landingPages: result });

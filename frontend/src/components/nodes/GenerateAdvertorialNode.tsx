@@ -1,6 +1,6 @@
 import { Handle, Position } from "@xyflow/react";
 import { useState } from "react";
-import { generateAdvertorial } from "../../api";
+import { generateAdvertorial, setDebugContext } from "../../api";
 import ContentModal from "../ContentModal";
 
 // Report structure from fwp-report-generator
@@ -65,6 +65,7 @@ export default function GenerateAdvertorialNode({ id, data }: GenerateAdvertoria
     setDone(false);
 
     try {
+      setDebugContext({ nodeId: id, nodeName: "Advertorial" });
       const result = await generateAdvertorial(report as Record<string, unknown>);
       setHeadline(result.headline);
       setContent(result.content);

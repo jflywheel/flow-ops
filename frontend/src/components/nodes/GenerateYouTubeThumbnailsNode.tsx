@@ -1,7 +1,7 @@
 import { Handle, Position } from "@xyflow/react";
 import { useState } from "react";
 import { createPortal } from "react-dom";
-import { generateYouTubeThumbnails } from "../../api";
+import { generateYouTubeThumbnails, setDebugContext } from "../../api";
 
 // Default reference image for AI Investor Podcast
 const DEFAULT_REFERENCE_IMAGE = "https://images.squarespace-cdn.com/content/v1/6541285a93c82b51f7865bb8/4b02ff09-c388-4225-8186-9df1a277b936/IMG_0509.jpg";
@@ -237,6 +237,7 @@ export default function GenerateYouTubeThumbnailsNode({
     setThumbnails([]);
 
     try {
+      setDebugContext({ nodeId: id, nodeName: "YT Thumbnails" });
       const result = await generateYouTubeThumbnails(
         inputText,
         referenceImageUrl || undefined,

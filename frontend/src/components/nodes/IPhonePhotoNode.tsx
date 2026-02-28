@@ -1,6 +1,6 @@
 import { Handle, Position } from "@xyflow/react";
 import { useState, useEffect } from "react";
-import { generatePhoto } from "../../api";
+import { generatePhoto, setDebugContext } from "../../api";
 
 // Visual concept structure from GenerateVisualConceptsNode
 interface VisualConcept {
@@ -145,6 +145,7 @@ ABSOLUTELY FORBIDDEN:
         promptText = `${visualConcept.concept}. Emotion: ${visualConcept.targetEmotion}. Colors: ${visualConcept.colorScheme}`;
       }
 
+      setDebugContext({ nodeId: id, nodeName: "Generate Image" });
       const result = await generatePhoto(promptText, extraInstructions || undefined, inputImageUrl || undefined, format, model);
       setImageUrl(result.imageUrl);
       setDone(true);

@@ -1,6 +1,6 @@
 import { Handle, Position } from "@xyflow/react";
 import { useState } from "react";
-import { generateCopy } from "../../api";
+import { generateCopy, setDebugContext } from "../../api";
 import ContentModal from "../ContentModal";
 
 interface CopyVariant {
@@ -52,6 +52,7 @@ export default function GenerateCopyNode({ id, data }: GenerateCopyNodeProps) {
     setError("");
 
     try {
+      setDebugContext({ nodeId: id, nodeName: "Generate Copy" });
       const result = await generateCopy(report, platform, mode);
       setCopy(result);
       data.updateNodeData?.(id, { copy: result });

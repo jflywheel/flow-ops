@@ -1,6 +1,6 @@
 import { Handle, Position } from "@xyflow/react";
 import { useState } from "react";
-import { generateVisualConcepts } from "../../api";
+import { generateVisualConcepts, setDebugContext } from "../../api";
 import ContentModal from "../ContentModal";
 
 // Visual concept structure from fwp-image-generator
@@ -98,6 +98,7 @@ export default function GenerateVisualConceptsNode({ id, data }: GenerateVisualC
       const advertorialContent = mode === "advertorial" ? parsedInput.advertorialContent : undefined;
       const customText = mode === "custom" ? (parsedInput.customText || parsedInput.advertorialContent || JSON.stringify(parsedInput.report)) : undefined;
 
+      setDebugContext({ nodeId: id, nodeName: "Visual Concepts" });
       const result = await generateVisualConcepts(
         report as Record<string, unknown> | null,
         count,

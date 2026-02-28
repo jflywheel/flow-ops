@@ -1,6 +1,6 @@
 import { Handle, Position } from "@xyflow/react";
 import { useState } from "react";
-import { transcribe } from "../../api";
+import { transcribe, setDebugContext } from "../../api";
 import ContentModal from "../ContentModal";
 
 interface TranscribeNodeProps {
@@ -50,6 +50,7 @@ export default function TranscribeNode({ id, data }: TranscribeNodeProps) {
         .map((v) => v.trim())
         .filter((v) => v.length > 0);
 
+      setDebugContext({ nodeId: id, nodeName: "Transcribe" });
       const result = await transcribe(
         audioUrl || undefined,
         audioBase64 || undefined,

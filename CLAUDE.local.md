@@ -213,9 +213,6 @@ When adding a new `/api/operations/*` endpoint:
 - When querying data (D1, R2, KV), always verify the query logic matches the SPECIFIC entity requested, not just any entity from the same provider/category.
 - When reporting numbers from data queries, double-check recency and accuracy before presenting. User relies on these numbers for business decisions.
 
-## Commit Often
-Commit after completing each meaningful unit of work (new feature, bug fix, refactor). Don't wait until the end of a session. If something is done and working, commit it.
-
 ## Session Continuity
 - This project uses a PLAN.md file for multi-session work. Always read PLAN.md at the start of a session when the user says 'continue'.
 - After completing a planned session, update PLAN.md with progress and mark completed items.
